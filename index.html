@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Elemental Rift - WebXR AR</title>
+  <style>
+    :root { color-scheme: dark; }
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #05060c; font-family: system-ui, sans-serif; color: #fff; }
+    canvas#scene { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+    button, select, input { font: inherit; }
+    button { cursor: pointer; border: 2px solid #fff3; border-radius: 6px; background: #1a2038; color: #fff; padding: 10px 16px; font-weight: 700; }
+    button:disabled { opacity: .35; cursor: not-allowed; }
+    button.primary { background: linear-gradient(90deg, #ff5a2a, #ffb02a); color: #160a00; border: 0; font-size: 18px; padding: 14px 26px; }
+
+    #intro { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: radial-gradient(ellipse at 50% 30%, #1a1f3a, #05060c 70%); z-index: 5; overflow: auto; }
+    #intro .card { max-width: 640px; padding: 28px; margin: 16px; }
+    h1 { margin: 0 0 6px; font-size: 40px; letter-spacing: 2px; background: linear-gradient(90deg, #ff5a2a, #ffd24a, #4fc3ff); -webkit-background-clip: text; background-clip: text; color: transparent; }
+    .tag { color: #aab4e0; margin: 0 0 18px; }
+    #status { background: #ffffff10; border-radius: 8px; padding: 10px 14px; margin: 14px 0; color: #dfe6ff; }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin: 14px 0; }
+    ul { padding-left: 20px; line-height: 1.6; color: #d3dbff; }
+    code { background: #ffffff18; padding: 1px 6px; border-radius: 4px; }
+    label { color: #aab4e0; }
+    select { background: #1a2038; color: #fff; border: 2px solid #fff3; border-radius: 6px; padding: 6px 8px; }
+
+    #flat-ui { display: none; }
+    #flat-ui .buttons { position: fixed; top: 10px; right: 10px; display: flex; gap: 6px; z-index: 2; flex-wrap: wrap; justify-content: flex-end; max-width: 60vw; }
+    #flat-ui .buttons button { width: 84px; height: 50px; border-radius: 2px; color: #111; border: 3px solid transparent; }
+    #flat-ui .buttons button.sel { border-color: #fff; }
+    #flat-ui .hold button { background: #ffd24a; width: 92px; }
+    #flat-ui .hold button.down { background: #fff; }
+    #flat-ui .tuning { position: fixed; top: 10px; left: 10px; z-index: 2; display: grid; gap: 6px; font-size: 12px; color: #aab4e0; }
+    #flat-ui .tuning input { width: 90px; padding: 4px; background: #fff; color: #000; border: 0; }
+    #hud { position: fixed; top: 112px; left: 10px; text-align: left; background: #000a; padding: 6px 14px; border-radius: 8px; z-index: 2; pointer-events: none; }
+    #banner { position: fixed; top: 22%; left: 0; right: 0; text-align: center; font-size: 64px; font-weight: 800; letter-spacing: 6px; color: #ffd24a; text-shadow: 0 0 24px #ff5a2a; pointer-events: none; transition: opacity .3s; z-index: 2; }
+    #bottom { position: fixed; bottom: 16px; left: 0; right: 0; text-align: center; z-index: 2; }
+    #bottom small { display: block; margin-top: 8px; color: #aab4e0; }
+    #hurt { position: fixed; inset: 0; background: radial-gradient(ellipse at center, transparent 40%, #f00 100%); opacity: 0; transition: opacity .25s; pointer-events: none; z-index: 3; }
+  </style>
+  <!-- three.js is bundled in /lib so the game runs without a CDN -->
+  <script type="importmap">{ "imports": { "three": "./lib/three.module.js" } }</script>
+</head>
+<body>
+  <canvas id="scene"></canvas>
+  <div id="hurt"></div>
+
+  <div id="intro">
+    <div class="card">
+      <h1>ELEMENTAL RIFT</h1>
+      <p class="tag">A WebXR mixed-reality game. Command fire, water and air with your bare hands.</p>
+
+      <div id="status">Checking for WebXR&hellip;</div>
+
+      <div class="row">
+        <button id="btn-ar" class="primary" disabled>Enter AR</button>
+        <button id="btn-vr" style="display:none" disabled>Enter VR</button>
+        <button id="btn-flat">Preview on this screen</button>
+      </div>
+      <div class="row">
+        <label for="scheme">Controls</label>
+        <select id="scheme">
+          <option value="hands">Hand tracking (Quest 3)</option>
+          <option value="buttons">Controller buttons (Quest 2)</option>
+        </select>
+      </div>
+
+      <div id="how-hands">
+        <b>Hand tracking</b> &mdash; turn on <i>Settings &rarr; Movement tracking &rarr; Hand tracking</i> on your Quest.
+        <ul>
+          <li><b>Pinch</b> thumb + index: cast your element</li>
+          <li><b>Fist</b>: empower &mdash; fire gets bigger and hotter (red &rarr; yellow &rarr; blue &rarr; white), water warms up</li>
+          <li><b>Open palm</b>: pull your element toward where the palm points</li>
+          <li><b>Pinch thumb + middle</b>: cool water &mdash; cold enough and it freezes into floating ice</li>
+          <li><b>Pinch thumb + ring</b>: switch element (fire / water / air)</li>
+          <li>Look at the back of your <b>left hand</b> for score and lives. Poke the panel buttons with a finger.</li>
+        </ul>
+      </div>
+      <div id="how-buttons" style="display:none">
+        <b>Controller buttons</b> &mdash; Quest 2 / Touch controllers.
+        <ul>
+          <li><b>Trigger</b>: cast your element (left controller = water, right = fire)</li>
+          <li><b>A / X</b>: empower (bigger, hotter fire / warmer water)</li>
+          <li><b>Grip</b>: pull your element toward where you aim</li>
+          <li><b>B / Y</b>: cool water (cold enough and it freezes)</li>
+          <li><b>Thumbstick click</b>: switch element</li>
+          <li>A button panel floats above your left controller &mdash; point at it and pull the trigger to pick an element or latch CAST / HEAT / PULL / COOL.</li>
+        </ul>
+      </div>
+
+      <b>Goal</b>
+      <ul>
+        <li><b>Frost wisps</b> melt under fire. <b>Ember imps</b> are put out by water (ice hurts most).</li>
+        <li><b>Stone husks</b> only crack under blue / white-hot fire &mdash; compress your flames. Soaking them with water first makes fire do far more.</li>
+        <li>Air gusts shove creatures back. Don't let them reach you!</li>
+      </ul>
+      <small style="color:#7f8bb8">Tip: WebXR needs HTTPS (or localhost). See README.md.</small>
+    </div>
+  </div>
+
+  <div id="flat-ui">
+    <div class="tuning">
+      <label>Compression <input id="compression-meter" type="number" placeholder="100"></label>
+      <label>Change rate <input id="change-rate" type="number" placeholder="10"></label>
+      <label>Particles / tick <input id="particlesPerClick" type="number" placeholder="8"></label>
+    </div>
+    <div class="buttons">
+      <button data-element="fire" style="background:rgb(255,54,54)">Fire</button>
+      <button data-element="water" style="background:rgb(90,255,255)">Water</button>
+      <button data-element="air" style="background:rgb(255,255,130)">Air</button>
+      <span class="hold" style="display:flex;gap:6px;flex-wrap:wrap">
+        <button data-hold="emit" title="Q or mouse button">Cast</button>
+        <button data-hold="empower" title="Space">Empower</button>
+        <button data-hold="redirect" title="R">Redirect</button>
+        <button data-hold="cool" title="B">Cool</button>
+      </span>
+      <button id="btn-exit-flat" style="width:auto;color:#fff">Back</button>
+    </div>
+    <div id="hud"></div>
+    <div id="banner"></div>
+    <div id="bottom">
+      <button id="btn-start" class="primary">Start game</button>
+      <small>Mouse = hand. Hold <code>Q</code> / click to cast, <code>Space</code> empower, <code>R</code> redirect to the cursor, <code>B</code> cool water, <code>E</code> switch element.</small>
+    </div>
+  </div>
+
+  <script type="module" src="./js/main.js"></script>
+</body>
+</html>
