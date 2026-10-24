@@ -10,8 +10,8 @@ export const STEP = 1 / 60;
 
 // The three knobs from the fire game's top-left inputs.
 export const CFG = {
-  compression: 100,   // fire game "compression-meter": higher = gentler push between overlapping particles
-  changeRate: 10,     // fire game "change-rate": overlaps needed per colour stage (red > yellow > blue > white)
+  compression: 200,   // fire game "compression-meter": higher = gentler push between overlapping particles
+  changeRate: 4,     // fire game "change-rate": overlaps needed per colour stage (red > yellow > blue > white)
   burst: 8,           // fire game "particlesPerClick": particles per emit tick
   burstInterval: 0.1, // seconds between emit ticks (fire game used 100ms)
   actionInterval: 0.1,// seconds between empower / redirect / cool ticks (also 100ms in the fire game)
