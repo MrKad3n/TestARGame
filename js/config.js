@@ -10,12 +10,13 @@ export const STEP = 1 / 60;
 
 // The three knobs from the fire game's top-left inputs.
 export const CFG = {
-  compression: 200,   // fire game "compression-meter": higher = gentler push between overlapping particles
-  changeRate: 4,     // fire game "change-rate": overlaps needed per colour stage (red > yellow > blue > white)
+  compression: 100,   // fire game "compression-meter": higher = gentler push between overlapping particles
+  changeRate: 10,     // fire game "change-rate": overlaps needed per colour stage (red > yellow > blue > white)
   burst: 8,           // fire game "particlesPerClick": particles per emit tick
   burstInterval: 0.1, // seconds between emit ticks (fire game used 100ms)
   actionInterval: 0.1,// seconds between empower / redirect / cool ticks (also 100ms in the fire game)
-  maxParticles: 450,
+  maxParticles: 550,
+  lifeScale: 2,       // elements last this many times longer than in the fire game
   gravity: 2.0,       // m/s^2 for water (game-feel value, real gravity makes water too hard to herd)
   floorY: 0,
   reach: 0.8,         // empower / cool only affect particles within this distance of the hand
@@ -31,4 +32,5 @@ export function loadCfgFromUrl() {
   num('burst', 'burst');
   num('max', 'maxParticles');
   num('gravity', 'gravity');
+  num('life', 'lifeScale');
 }

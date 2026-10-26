@@ -34,30 +34,38 @@ For hand tracking turn it on in the Quest: *Settings -> Movement tracking -> Han
 | **Space** empower | make a fist | A / X | Space |
 | **R** redirect to cursor | open palm - elements fly to where the palm points | grip - elements fly to where you aim | R (to the cursor) |
 | **B** cool water | pinch thumb + middle | B / Y | B |
-| Fire / Water / Air buttons | pinch thumb + ring cycles, or poke the panel on the back of your left hand | thumbstick click cycles, or point at the panel above the left controller | on-screen buttons, E |
+| Fire / Water / Air | pinch thumb + ring cycles, or pick it in the menu | thumbstick click cycles, or pick it in the menu | on-screen buttons, E |
 
-The left hand starts with **water**, the right hand with **fire**. Redirect gets a little aim assist toward creatures.
+## The menu (nothing is on screen until you ask for it)
 
-**Quest 2 / button mode** also adds a panel above your left controller with Fire / Water / Air buttons and
-latching CAST / HEAT / PULL / COOL toggles (point + trigger). The scheme is auto-picked from the browser's
-user agent (`Quest 3` -> hands, anything else -> buttons) and can be overridden on the start page or with `?scheme=hands|buttons`.
+A small **menu button** (a `≡` with wave / lives / score) floats over the back of your menu hand like a watch and only shows
+while you look at it. **Poke it** (Quest 3 hands) or **point + trigger** (controllers) to open the menu in front of you; hit it again or **X** to close.
+Prefer a button / gesture? Bind **Open menu** to anything in the hand tabs.
 
-## How the particles map to the fire game
-
-| Fire game | Here |
+| Tab | What you can change |
 |---|---|
-| overlap count = `power`, red -> yellow -> blue -> white every `changeRate` | same (`Fire.findPower`, `Fire.colorize`) |
-| overlapping flames push each other apart by `overlap / compressionPower` | same |
-| flame shrinks 2% per frame, dies near 0 (about 4 s) | same - physics runs on a fixed 60 Hz step so it is identical at 72/90/120 Hz |
-| empower: `size += 2` | `size += 2px` equivalent, capped, only within arm's reach of the hand |
-| redirect: speed = distance / 62.5, multiplier 1.05 decaying x0.985 | same, now in 3D |
-| compression slows flames (`speedMultiplier -= 0.01` per overlap) | same, softer (0.004) and clamped at 0 (the original could go negative and drift backwards) |
-| water: gravity, temperature, ice below 15, melts at 20, cold spreads, evaporates when hot | same; floor is the real floor (`local-floor`) |
-| ice is rigid and pushes water away | same - frozen water floats in mid-air and shoves creatures |
-| Air button (no behaviour) | new: gusts that shove flames/droplets, fan flames, cool water, knock creatures back |
-| 3 tuning inputs (compression, change rate, particles per click) | URL params `?compression=100&rate=10&burst=8&gravity=2&max=450`, and the inputs in preview mode |
+| **PLAY** | Start / resume / play again, and a summary of what each hand does right now |
+| **LEFT HAND / RIGHT HAND** | The hand's **element** (fire / water / air), which **gesture or button** triggers *Cast, Empower, Redirect, Cool, Switch element, Open menu*, and "hold on" latches (CAST / HEAT / PULL / COOL stay on without holding anything). Toggle between editing hand **gestures** (pinch index/middle/ring/pinky, fist, open palm) and **controller buttons** (trigger, grip, A/X, B/Y, stick click). |
+| **WORLD** | Particles per tick, compression, colour rate, lifetime multiplier, water gravity, empower/cool reach, particle cap, which hand wears the menu button, room-surface overlay, reset |
 
-New interactions: fire heats water and melts ice (and is dampened by it).
+Everything is saved on the headset (localStorage). Defaults: left hand **water**, right hand **fire**; pinch index = cast,
+fist = empower, open palm = redirect, pinch middle = cool, pinch ring = switch element (controllers: trigger, A/X, grip, B/Y, stick click).
+Redirect gets a little aim assist toward creatures.
+
+## Real-world collision
+
+Elements bounce off your real room instead of passing through it.
+
+| Headset | What it collides with |
+|---|---|
+| **Quest 3 / 3S** | The room scan from *Space Setup* (WebXR `mesh-detection`: walls, floor, ceiling, tables, couches), plus detected planes (`plane-detection`). The browser asks for "spatial data" permission the first time. |
+| **Quest 2** | Has no room scan, so: the floor and your **Guardian boundary** as walls (`bounded-floor`). Furniture can't be detected on Quest 2. |
+| Anything else | Floor only. |
+
+* Water splashes, bounces and rests on tables; fire is shoved back and kicks off walls (with a few sparks); air gusts deflect.
+* The WORLD tab / `?showmesh=1` shows the surfaces it found (`env.label()` reads `Room scan: N tris`, `Guardian walls + floor`, or `Floor only`). If a Quest 3 only gets the floor, run Space Setup (Settings -> Physical space -> Space setup) and relaunch.
+* Add `?showmesh=1` to draw the collision surfaces, or `?demo=1` in the on-screen preview to try a virtual table, wall and pillar.
+* Creatures still fly through walls (they come from the rift).
 
 ## Creatures
 
@@ -76,12 +84,15 @@ js/particles.js   Fire / Water / Air particles + 60 Hz world
 js/render.js      instanced billboard particle renderer
 js/gestures.js    hand-tracking gesture detection (pure maths)
 js/input.js       hands / controllers / mouse -> "casters"
+js/environment.js real-world collision (room mesh / planes / Guardian)
 js/game.js        creatures, waves, damage rules
 js/ui.js          pokeable / pointable in-world panels
+js/menu.js        the menu (tabs, bindings, tuning) and the wrist menu button
+js/settings.js    saved per-hand element + bindings, world tuning
 lib/              three.js r186 (MIT)
 ```
 
 ## Notes
 
 * Gesture thresholds live at the top of `js/gestures.js` (`T`) if pinches feel too tight/loose for your hands.
-* Particle cap is `CFG.maxParticles` (450) in `js/config.js` to keep Quest frame times steady.
+* Particle cap is `CFG.maxParticles` (550) in `js/config.js` to keep Quest frame times steady.

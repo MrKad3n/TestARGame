@@ -1,10 +1,7 @@
 // Hand-tracking gesture reader (Quest 3).
 //
-//   index  + thumb pinch  -> EMIT      (fire game: hold Q)
-//   closed fist           -> EMPOWER   (fire game: hold Space)
-//   open palm             -> REDIRECT  (fire game: hold R)  - particles fly to where the palm points
-//   middle + thumb pinch  -> COOL      (fire game: hold B)
-//   ring   + thumb pinch  -> CYCLE ELEMENT (fire > water > air)
+// This only detects raw gestures (out.g): pinch-index / -middle / -ring / -pinky, fist, open palm.
+// Which gesture does what is decided by the player's bindings (settings.js, edited in the in-game menu).
 //
 // Pure maths on joint positions so it can be unit-tested without a headset.
 import * as THREE from 'three';
@@ -19,13 +16,14 @@ const v = () => new THREE.Vector3();
 const tmp = { palm: v(), a: v(), b: v(), n: v(), mid: v(), toHead: v() };
 
 export function newGestureState() {
-  return { pinch: { index: false, middle: false, ring: false }, fist: false, open: false, cycleCooldown: 0 };
+  return { pinch: { index: false, middle: false, ring: false, pinky: false }, fist: false, open: false };
 }
 
 const FINGERS = [
   ['index', 'index-finger-tip'],
   ['middle', 'middle-finger-tip'],
   ['ring', 'ring-finger-tip'],
+  ['pinky', 'pinky-finger-tip'],
 ];
 
 /**
@@ -48,8 +46,6 @@ export function analyzeHand(get, hand, head, st, out, dt) {
   const midKnuckle = get('middle-finger-phalanx-proximal');
   if (!wrist || !thumb || !idxTip || !midTip || !ringTip || !pinkTip || !idxMc || !pinkMc || !midKnuckle) return out;
   out.tracked = true;
-
-  st.cycleCooldown = Math.max(0, st.cycleCooldown - dt);
 
   // palm centre and outward palm normal
   const palm = tmp.palm.copy(wrist).add(midKnuckle).multiplyScalar(0.5);
@@ -84,17 +80,17 @@ export function analyzeHand(get, hand, head, st, out, dt) {
     st.pinch[name] = was ? dists[name] < T.pinchOff : dists[name] < T.pinchOn;
     if (st.pinch[name] && name !== best) st.pinch[name] = false;
   }
-  if (st.fist) { st.pinch.index = st.pinch.middle = st.pinch.ring = false; }
-  const anyPinch = st.pinch.index || st.pinch.middle || st.pinch.ring;
+  if (st.fist) { st.pinch.index = st.pinch.middle = st.pinch.ring = st.pinch.pinky = false; }
+  const anyPinch = st.pinch.index || st.pinch.middle || st.pinch.ring || st.pinch.pinky;
   // open palm = all fingers extended, thumb not pinching anything
   st.open = !st.fist && !anyPinch && (st.open ? minD > T.openOff : minD > T.openOn);
 
-  out.emit = st.pinch.index;
-  out.cool = st.pinch.middle;
-  out.empower = st.fist;
-  out.redirect = st.open;
-  out.cycle = false;
-  if (st.pinch.ring && st.cycleCooldown <= 0) { out.cycle = true; st.cycleCooldown = 0.7; }
+  out.g.pinchIndex = st.pinch.index;
+  out.g.pinchMiddle = st.pinch.middle;
+  out.g.pinchRing = st.pinch.ring;
+  out.g.pinchPinky = st.pinch.pinky;
+  out.g.fist = st.fist;
+  out.g.palm = st.open;
 
   // where particles spawn
   out.emitPos.copy(thumb).add(idxTip).multiplyScalar(0.5);

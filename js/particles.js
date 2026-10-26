@@ -13,6 +13,7 @@ const FIRE_START = 25 * S;
 const FIRE_MAX = 0.08;
 const EMPOWER_GROW = 2 * S;      // "size += 2" in the fire game
 
+const lifeScaleRef = { v: 1 };
 export const ELEMENTS = ['fire', 'water', 'air'];
 
 class Particle {
@@ -22,6 +23,7 @@ class Particle {
     this.vx = 0; this.vy = 0; this.vz = 0;
     this.size = 0.03;
     this.r = 1; this.g = 1; this.b = 1; this.a = 1;
+    this.px = NaN; this.py = 0; this.pz = 0;
     this.dead = false;
   }
 }
@@ -33,6 +35,21 @@ function randomDir(out) {
   out[0] = x / l; out[1] = y / l; out[2] = z / l;
 }
 const _d = [0, 0, 0];
+const H = { nx: 0, ny: 1, nz: 0, depth: 0 };
+
+// Push a particle out of real-world surfaces. Returns true if it touched something and
+// leaves the contact normal in H (pointing toward the particle).
+function collideEnv(p, w) {
+  const env = w.env;
+  if (!env || !env.active) return false;
+  let hit = false;
+  for (let k = 0; k < 3; k++) {
+    if (!env.query(p.x, p.y, p.z, p.size, H, p.px, p.py, p.pz)) break;
+    p.x += H.nx * H.depth; p.y += H.ny * H.depth; p.z += H.nz * H.depth;
+    hit = true;
+  }
+  return hit;
+}
 
 export class Fire extends Particle {
   constructor(x, y, z) {
@@ -50,9 +67,21 @@ export class Fire extends Particle {
     this.x += this.sx * this.mult;
     this.y += this.sy * this.mult;
     this.z += this.sz * this.mult;
-    this.size -= this.size * 0.02;
+    // fire game: -2% per frame. lifeScale stretches that (2 = lasts twice as long)
+    this.size *= w.fireDecay;
     this.mult *= 0.985;
     if (this.size <= 0.2 * S) this.dead = true;
+    if (collideEnv(this, w)) this.bounce(w);
+  }
+
+  // flames shoved against a wall lose their inward speed and kick back off it
+  bounce(w) {
+    const sn = this.sx * H.nx + this.sy * H.ny + this.sz * H.nz;
+    if (sn < 0) {
+      const k = 1.35 * sn;
+      this.sx -= k * H.nx; this.sy -= k * H.ny; this.sz -= k * H.nz;
+      if (-sn * this.mult > 0.004 && Math.random() < 0.25) w.spark(this.x, this.y, this.z, 1, 0.6, 0.2, 1, 0.4);
+    }
   }
 
   // power = how many fire particles overlap this one. More compressed = hotter.
@@ -146,7 +175,7 @@ export class Water extends Particle {
 
     if (this.isIce) {
       this.x = this.fx; this.y = this.fy; this.z = this.fz;
-      this.temperature += 0.005;
+      this.temperature += 0.005 / c.lifeScale;
       this.transferTemperature(w);
     } else {
       this.vy -= c.gravity * STEP;
@@ -160,9 +189,18 @@ export class Water extends Particle {
         this.vx *= 0.92; this.vz *= 0.92;
       }
 
-      this.temperature += 0.02;
-      if (this.temperature > 70) this.size -= 0.15 * S * ((this.temperature - 70) / 30);
-      else this.size -= 0.005 * S;
+      this.temperature += 0.02 / c.lifeScale;
+      if (this.temperature > 70) this.size -= 0.15 * S * ((this.temperature - 70) / 30) / c.lifeScale;
+      else this.size -= 0.005 * S / c.lifeScale;
+
+      if (collideEnv(this, w)) {
+        const vn = this.vx * H.nx + this.vy * H.ny + this.vz * H.nz;
+        if (vn < 0) {
+          const k = Math.abs(vn) < 0.08 ? 1 : 1.3;      // resting contact: just stop, don't jitter
+          this.vx -= k * vn * H.nx; this.vy -= k * vn * H.ny; this.vz -= k * vn * H.nz;
+        }
+        this.vx *= 0.96; this.vz *= 0.96;
+      }
 
       this.findColdParticles(w);
     }
@@ -255,7 +293,7 @@ export class Air extends Particle {
     super('air', x, y, z);
     this.vx = vx; this.vy = vy; this.vz = vz;
     this.life = 0;
-    this.maxLife = 0.9 + rnd() * 0.7;
+    this.maxLife = (0.9 + rnd() * 0.7) * lifeScaleRef.v;
     this.size = 0.02;
     this.r = 0.85; this.g = 0.97; this.b = 1; this.a = 0;
   }
@@ -266,6 +304,10 @@ export class Air extends Particle {
     this.size = 0.02 + 0.05 * k;
     this.x += this.vx * STEP; this.y += this.vy * STEP; this.z += this.vz * STEP;
     this.vx *= 0.992; this.vy *= 0.992; this.vz *= 0.992;
+    if (collideEnv(this, w)) {
+      const vn = this.vx * H.nx + this.vy * H.ny + this.vz * H.nz;
+      if (vn < 0) { this.vx -= 1.5 * vn * H.nx; this.vy -= 1.5 * vn * H.ny; this.vz -= 1.5 * vn * H.nz; }
+    }
     this.a = 0.32 * (1 - k) * Math.min(1, k / 0.1);
 
     // gust: shove flames and droplets, fan flames, cool water
@@ -296,12 +338,16 @@ export class Spark extends Particle {
     this.life = 0; this.maxLife = life * (0.7 + rnd() * 0.6);
     this.size = 0.012 + rnd() * 0.012;
   }
-  update() {
+  update(w) {
     this.life += STEP;
     const k = this.life / this.maxLife;
     if (k >= 1) { this.dead = true; return; }
     this.x += this.vx * STEP; this.y += this.vy * STEP; this.z += this.vz * STEP;
     this.vy -= 0.8 * STEP;
+    if (collideEnv(this, w)) {
+      const vn = this.vx * H.nx + this.vy * H.ny + this.vz * H.nz;
+      if (vn < 0) { this.vx -= 1.4 * vn * H.nx; this.vy -= 1.4 * vn * H.ny; this.vz -= 1.4 * vn * H.nz; }
+    }
     this.a = 1 - k;
   }
 }
@@ -309,6 +355,8 @@ export class Spark extends Particle {
 export class ParticleWorld {
   constructor(cfg) {
     this.cfg = cfg;
+    this.fireDecay = 0.98;
+    this.env = null;                 // Environment (real-world surfaces), set by main.js
     this.list = [];
     this.acc = 0;
     this.cell = 0.16;
@@ -405,6 +453,8 @@ export class ParticleWorld {
   }
 
   step() {
+    lifeScaleRef.v = this.cfg.lifeScale;
+    this.fireDecay = Math.pow(0.98, 1 / this.cfg.lifeScale);
     const g = this.grid; g.clear();
     const c = this.cell, list = this.list;
     for (let i = 0; i < list.length; i++) {
@@ -415,7 +465,7 @@ export class ParticleWorld {
       if (!arr) { arr = []; g.set(k, arr); }
       arr.push(p);
     }
-    for (let i = 0; i < list.length; i++) list[i].update(this);
+    for (let i = 0; i < list.length; i++) { const q = list[i]; q.update(this); q.px = q.x; q.py = q.y; q.pz = q.z; }   // last collision-resolved position
     let j = 0;
     for (let i = 0; i < list.length; i++) if (!list[i].dead) list[j++] = list[i];
     list.length = j;

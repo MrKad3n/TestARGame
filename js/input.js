@@ -6,18 +6,20 @@
 import * as THREE from 'three';
 import { analyzeHand, newGestureState } from './gestures.js';
 import { ELEMENTS } from './particles.js';
+import { settings, GESTURE_KEY, saveSettings } from './settings.js';
 
 export const ELEMENT_COLORS = { fire: 0xff5a2a, water: 0x3fa9ff, air: 0xd8f4ff };
 
 export class Caster {
-  constructor(id, element) {
+  constructor(id) {
     this.id = id;
-    this.element = element;
+    this.cfg = settings.hands[id];   // live per-hand settings (element + bindings), edited by the menu
     this.source = 'none';          // 'hand' | 'controller' | 'mouse' | 'none'
     this.tracked = false;
     this.emit = this.empower = this.redirect = this.cool = false;
     this.latch = { emit: false, empower: false, redirect: false, cool: false }; // on-screen / in-world toggle buttons
     this.cycle = false;            // one-frame "next element" request
+    this.menuPressed = false;      // one-frame "open/close menu" request
     this.emitPos = new THREE.Vector3();
     this.emitDir = new THREE.Vector3(0, 0, -1);
     this.aimOrigin = new THREE.Vector3();
@@ -33,6 +35,8 @@ export class Caster {
   get wantsEmpower() { return this.empower || this.latch.empower; }
   get wantsRedirect() { return this.redirect || this.latch.redirect; }
   get wantsCool() { return this.cool || this.latch.cool; }
+  get element() { return this.cfg.element; }
+  set element(v) { this.cfg.element = v; saveSettings(); }
   nextElement() { this.element = ELEMENTS[(ELEMENTS.indexOf(this.element) + 1) % ELEMENTS.length]; }
 }
 
@@ -55,7 +59,7 @@ export class InputManager {
     this.renderer = renderer;
     this.rig = new THREE.Group();
     scene.add(this.rig);
-    this.casters = { left: new Caster('left', 'water'), right: new Caster('right', 'fire') };
+    this.casters = { left: new Caster('left'), right: new Caster('right') };
     this.slots = [];
     this.pointers = [];            // for the in-world UI: { id, kind:'ray'|'tip', origin, dir, pos, down }
     this.handTrackingSeen = false;
@@ -73,7 +77,7 @@ export class InputManager {
 
       const slot = {
         i, ctrl, grip, hand, src: null, kind: 'none', handedness: 'none',
-        gesture: newGestureState(), prevButtons: [], stickLatch: false,
+        gesture: newGestureState(), prevButtons: [], stickLatch: false, edge: { cycle: false, menu: false }, cd: { cycle: 0, menu: 0 },
         handMesh: new THREE.InstancedMesh(sphere, handMat.clone(), JOINTS.length),
         ray: makeRay(),
         prevTipZ: null,
@@ -88,7 +92,7 @@ export class InputManager {
       this.slots.push(slot);
     }
     this._outHand = {
-      tracked: false, emit: false, cool: false, empower: false, redirect: false, cycle: false,
+      tracked: false, g: { pinchIndex: false, pinchMiddle: false, pinchRing: false, pinchPinky: false, fist: false, palm: false },
       palm: new THREE.Vector3(), palmNormal: new THREE.Vector3(), wrist: new THREE.Vector3(),
       emitPos: new THREE.Vector3(), emitDir: new THREE.Vector3(0, 0, -1),
       aimOrigin: new THREE.Vector3(), aimDir: new THREE.Vector3(0, 0, -1), indexTip: new THREE.Vector3(),
@@ -103,6 +107,7 @@ export class InputManager {
     if (slot.kind === 'controller') this.controllerSeen = true;
     slot.gesture = newGestureState();
     slot.prevButtons = [];
+    slot.edge = { cycle: false, menu: false };
   }
 
   onDisconnected(slot) {
@@ -115,14 +120,14 @@ export class InputManager {
   /** Call once per XR frame. head = world position of the headset. */
   update(dt, head) {
     this.pointers.length = 0;
-    for (const c of Object.values(this.casters)) { c.cycle = false; if (c.source !== 'mouse') c.tracked = false; }
+    for (const c of Object.values(this.casters)) { c.cycle = false; c.menuPressed = false; if (c.source !== 'mouse') c.tracked = false; }
 
     for (const slot of this.slots) {
       if (!slot.src) continue;
       const caster = this.casters[slot.handedness];
       if (!caster) continue;
       if (slot.kind === 'hand') this.updateHand(slot, caster, dt, head);
-      else if (slot.kind === 'controller') this.updateController(slot, caster);
+      else if (slot.kind === 'controller') this.updateController(slot, caster, dt);
     }
   }
 
@@ -137,8 +142,11 @@ export class InputManager {
     caster.tracked = out.tracked;
     if (!out.tracked) { caster.emit = caster.empower = caster.redirect = caster.cool = false; slot.handMesh.visible = false; return; }
 
-    caster.emit = out.emit; caster.empower = out.empower; caster.redirect = out.redirect; caster.cool = out.cool;
-    if (out.cycle) { caster.cycle = true; caster.nextElement(); this.haptic(slot, 0.2, 40); }
+    // gestures -> actions, through the player's bindings
+    const bind = caster.cfg.hand, g = out.g;
+    const on = (action) => { const k = GESTURE_KEY[bind[action]]; return !!(k && g[k]); };
+    caster.emit = on('emit'); caster.empower = on('empower'); caster.redirect = on('redirect'); caster.cool = on('cool');
+    this.edges(slot, caster, on('cycle'), on('menu'), dt);
     caster.palm.copy(out.palm); caster.palmNormal.copy(out.palmNormal); caster.wrist.copy(out.wrist);
     caster.emitPos.copy(out.emitPos); caster.emitDir.copy(out.emitDir);
     caster.aimOrigin.copy(out.aimOrigin); caster.aimDir.copy(out.aimDir);
@@ -162,10 +170,10 @@ export class InputManager {
     slot.handMesh.visible = n > 0;
 
     // in-world UI: poke with the index fingertip of the hand that isn't pinching
-    if (!out.emit) this.pointers.push({ id: caster.id, kind: 'tip', pos: out.indexTip, down: false, slot });
+    if (!g.pinchIndex && !g.fist) this.pointers.push({ id: caster.id, kind: 'tip', pos: out.indexTip, down: false, slot });
   }
 
-  updateController(slot, caster) {
+  updateController(slot, caster, dt) {
     const gp = slot.src.gamepad;
     slot.handMesh.visible = false;
     caster.source = 'controller';
@@ -192,12 +200,11 @@ export class InputManager {
     const trigger = pressed(0), squeeze = pressed(1), stick = pressed(3), btnA = pressed(4), btnB = pressed(5);
     const prev = slot.prevButtons;
 
-    caster.emit = trigger;
-    caster.redirect = squeeze;
-    caster.empower = btnA;
-    caster.cool = btnB;
-    if (stick && !prev[3]) { caster.cycle = true; caster.nextElement(); this.haptic(slot, 0.25, 40); }
-    slot.prevButtons = [trigger, squeeze, false, stick, btnA, btnB];
+    const bind = caster.cfg.ctrl;
+    const state = { trigger, grip: squeeze, a: btnA, b: btnB, stick };
+    const on = (action) => !!state[bind[action]];
+    caster.emit = on('emit'); caster.redirect = on('redirect'); caster.empower = on('empower'); caster.cool = on('cool');
+    this.edges(slot, caster, on('cycle'), on('menu'), dt);
 
     // visible pointer ray, coloured by element
     slot.ray.visible = true;
@@ -205,6 +212,14 @@ export class InputManager {
     slot.ray.material.color.setHex(ELEMENT_COLORS[caster.element]);
 
     this.pointers.push({ id: caster.id, kind: 'ray', origin: caster.aimOrigin, dir: caster.aimDir, down: trigger, slot });
+  }
+
+  // rising-edge actions (switch element / open menu) with a short cooldown
+  edges(slot, caster, cycleOn, menuOn, dt) {
+    slot.cd.cycle = Math.max(0, slot.cd.cycle - dt); slot.cd.menu = Math.max(0, slot.cd.menu - dt);
+    if (cycleOn && !slot.edge.cycle && slot.cd.cycle <= 0) { caster.cycle = true; caster.nextElement(); slot.cd.cycle = 0.5; this.haptic(slot, 0.25, 40); }
+    if (menuOn && !slot.edge.menu && slot.cd.menu <= 0) { caster.menuPressed = true; slot.cd.menu = 0.5; }
+    slot.edge.cycle = cycleOn; slot.edge.menu = menuOn;
   }
 
   haptic(slot, intensity = 0.3, ms = 40) {
