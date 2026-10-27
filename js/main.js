@@ -176,7 +176,7 @@ function loop() {
     if (needMenuPlace && head.lengthSq() > 0) { needMenuPlace = false; menu.open('play'); }
     for (const c of Object.values(input.casters)) if (c.menuPressed) menu.toggle();
   } else {
-    flat.update();
+    flat.update(dt);
   }
 
   game.update(dt, { head, casters: input.casters, camQuat });

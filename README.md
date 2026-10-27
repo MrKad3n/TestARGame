@@ -32,9 +32,18 @@ For hand tracking turn it on in the Quest: *Settings -> Movement tracking -> Han
 |---|---|---|---|
 | **Q** spawn particles | pinch thumb + index | trigger | hold Q / click |
 | **Space** empower | make a fist | A / X | Space |
-| **R** redirect to cursor | open palm - elements fly to where the palm points | grip - elements fly to where you aim | R (to the cursor) |
+| **R** redirect to cursor | *(unbound by default - open palm is neutral)* | grip - elements fly to where you aim | R (to the cursor) |
+| *new:* **sweep** | just move your hand - elements near it (of your hand's element) get pushed along | move the controller | move the mouse |
 | **B** cool water | pinch thumb + middle | B / Y | B |
 | Fire / Water / Air | pinch thumb + ring cycles, or pick it in the menu | thumbstick click cycles, or pick it in the menu | on-screen buttons, E |
+
+## Pushing and momentum
+
+* **Sweep:** move your hand and elements of *your hand's element* within ~40 cm of it get pushed the way the hand moves (a water hand pushes water, a fire hand pushes fire).
+  It's an impulse, so it's physical: the faster and longer you sweep, the faster they go (capped), and they keep that momentum afterwards.
+* **Cancelling:** sweep the opposite way by the same amount and the momentum is cancelled exactly; half as much leaves half; too far reverses it.
+* **Condensed fire keeps moving:** the fire game slowed flames the more they were compressed. Now compression only squeezes flames (colour/heat) and never kills momentum; fire is slowed only by drag (`CFG.fireDrag`) and by walls. Water also keeps its horizontal momentum (the fire game damped it 2% per frame).
+* Strength and radius are in the WORLD tab (`Hand push strength` 0 turns it off, `?sweep=` in the URL). Bind **Sweep** to a gesture (e.g. open palm) if you'd rather push only when you choose to.
 
 ## The menu (nothing is on screen until you ask for it)
 
@@ -49,8 +58,8 @@ Prefer a button / gesture? Bind **Open menu** to anything in the hand tabs.
 | **WORLD** | Particles per tick, compression, colour rate, lifetime multiplier, water gravity, empower/cool reach, particle cap, which hand wears the menu button, room-surface overlay, reset |
 
 Everything is saved on the headset (localStorage). Defaults: left hand **water**, right hand **fire**; pinch index = cast,
-fist = empower, open palm = redirect, pinch middle = cool, pinch ring = switch element (controllers: trigger, A/X, grip, B/Y, stick click).
-Redirect gets a little aim assist toward creatures.
+fist = empower, pinch middle = cool, pinch ring = switch element, **sweep = always on** (controllers: trigger, A/X, grip = redirect, B/Y, stick click).
+Open palm does nothing by default; bind it to anything you like. Redirect (if you bind it) gets a little aim assist toward creatures.
 
 ## Real-world collision
 

@@ -20,6 +20,9 @@ export const CFG = {
   gravity: 2.0,       // m/s^2 for water (game-feel value, real gravity makes water too hard to herd)
   floorY: 0,
   reach: 0.8,         // empower / cool only affect particles within this distance of the hand
+  sweepGain: 1,       // how strongly moving your hand pushes elements (0 = off)
+  sweepRadius: 0.4,   // elements within this distance of the hand get pushed
+  fireDrag: 0.988,    // fire keeps this fraction of its velocity each 60Hz step
   aimDistance: 1.4,   // how far in front of a palm / controller the "redirect" target sits
 };
 
@@ -33,4 +36,5 @@ export function loadCfgFromUrl() {
   num('max', 'maxParticles');
   num('gravity', 'gravity');
   num('life', 'lifeScale');
+  num('sweep', 'sweepGain');
 }

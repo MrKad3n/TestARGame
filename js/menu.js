@@ -12,6 +12,8 @@ import {
 
 const COLORS = { fire: '#ff5a2a', water: '#3fa9ff', air: '#d8f4ff' };
 const TABS = [['play', 'PLAY'], ['left', 'LEFT HAND'], ['right', 'RIGHT HAND'], ['world', 'WORLD']];
+const ROW = 50;           // hand-tab row pitch
+const WROW = 44;          // world-tab row pitch
 const fmt = (n) => String(Math.floor(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 
 export class Menu {
@@ -95,19 +97,19 @@ export class Menu {
     const kind = this.kind();
     const list = kind === 'hand' ? HAND_INPUTS : CTRL_INPUTS;
     ACTIONS.forEach((a, i) => {
-      const y = 172 + i * 54;
+      const y = 172 + i * ROW;
       const step = (dir) => () => {
         const cur = list.indexOf(cfg[kind][a]);
         cfg[kind][a] = list[(cur + dir + list.length) % list.length];
         this.mark();
       };
-      B.push({ id: `${a}-prev`, x: 470, y, w: 56, h: 46, label: '<', font: 28, color: '#ffd24a', onClick: step(-1) });
-      B.push({ id: `${a}-val`, x: 532, y, w: 262, h: 46, label: () => INPUT_LABEL[cfg[kind][a]], font: 24, color: '#ffffff', onClick: step(1) });
-      B.push({ id: `${a}-next`, x: 800, y, w: 56, h: 46, label: '>', font: 28, color: '#ffd24a', onClick: step(1) });
+      B.push({ id: `${a}-prev`, x: 470, y, w: 56, h: 42, label: '<', font: 28, color: '#ffd24a', onClick: step(-1) });
+      B.push({ id: `${a}-val`, x: 532, y, w: 262, h: 42, label: () => INPUT_LABEL[cfg[kind][a]], font: 24, color: '#ffffff', onClick: step(1) });
+      B.push({ id: `${a}-next`, x: 800, y, w: 56, h: 42, label: '>', font: 28, color: '#ffd24a', onClick: step(1) });
     });
     // latch toggles: keep an action held without any gesture / button (great for Quest 2 or tired hands)
     [['emit', 'CAST'], ['empower', 'HEAT'], ['redirect', 'PULL'], ['cool', 'COOL']].forEach(([k, label], i) => B.push({
-      id: 'latch-' + k, x: 250 + i * 165, y: 172 + 6 * 54 + 4, w: 155, h: 46, label, font: 22, color: '#ffd24a',
+      id: 'latch-' + k, x: 250 + i * 165, y: 172 + ACTIONS.length * ROW + 2, w: 155, h: 42, label, font: 22, color: '#ffd24a',
       active: () => caster.latch[k], onClick: () => { caster.latch[k] = !caster.latch[k]; this.panel.dirty = true; },
     }));
     B.push({
@@ -123,28 +125,28 @@ export class Menu {
 
   buildWorld(B) {
     TUNABLES.forEach(([key, , min, max, step, dec], i) => {
-      const y = 98 + i * 54;
+      const y = 92 + i * WROW;
       const change = (dir) => () => {
         const v = Math.round((CFG[key] + dir * step) * 100) / 100;
         CFG[key] = Math.min(max, Math.max(min, v));
         this.mark();
       };
-      B.push({ id: key + '-', x: 600, y, w: 60, h: 46, label: '-', font: 32, color: '#ffd24a', onClick: change(-1) });
-      B.push({ id: key + '+', x: 800, y, w: 60, h: 46, label: '+', font: 32, color: '#ffd24a', onClick: change(1) });
+      B.push({ id: key + '-', x: 600, y, w: 60, h: 38, label: '-', font: 32, color: '#ffd24a', onClick: change(-1) });
+      B.push({ id: key + '+', x: 800, y, w: 60, h: 38, label: '+', font: 32, color: '#ffd24a', onClick: change(1) });
     });
-    const y1 = 98 + TUNABLES.length * 54;
+    const y1 = 92 + TUNABLES.length * WROW;
     B.push({
-      id: 'menuhand', x: 600, y: y1, w: 260, h: 46, font: 24, color: '#ffffff',
+      id: 'menuhand', x: 600, y: y1, w: 260, h: 38, font: 24, color: '#ffffff',
       label: () => (settings.menuHand === 'left' ? 'LEFT HAND' : 'RIGHT HAND'),
       onClick: () => { settings.menuHand = settings.menuHand === 'left' ? 'right' : 'left'; this.mark(); },
     });
     B.push({
-      id: 'mesh', x: 600, y: y1 + 54, w: 260, h: 46, font: 24, color: '#7ff0c0',
+      id: 'mesh', x: 600, y: y1 + WROW, w: 260, h: 38, font: 24, color: '#7ff0c0',
       label: () => (settings.showMesh ? 'SHOWN' : 'HIDDEN'), active: () => settings.showMesh,
       onClick: () => { settings.showMesh = !settings.showMesh; this.d.env.setWireVisible(settings.showMesh); this.mark(); },
     });
     B.push({
-      id: 'reset-all', x: 28, y: 640, w: 300, h: 44, label: 'RESET EVERYTHING', font: 20, color: '#ff6b8a',
+      id: 'reset-all', x: 28, y: 642, w: 300, h: 44, label: 'RESET EVERYTHING', font: 20, color: '#ff6b8a',
       onClick: () => { resetAll(); this.d.env.setWireVisible(false); this.build(); this.panel.dirty = true; },
     });
   }
@@ -158,14 +160,14 @@ export class Menu {
     if (this.tab === 'play') this.drawPlay(ctx, W, text);
     else if (this.tab === 'world') {
       TUNABLES.forEach(([key, label, , , , dec], i) => {
-        const y = 98 + i * 54 + 23;
+        const y = 92 + i * WROW + 19;
         text(label, 32, y, '24px system-ui, sans-serif', '#ffffff');
         text(Number(CFG[key]).toFixed(dec), 730, y, 'bold 26px system-ui, sans-serif', '#ffd24a', 'center');
       });
-      const y1 = 98 + TUNABLES.length * 54 + 23;
+      const y1 = 92 + TUNABLES.length * WROW + 19;
       text('Menu button is on your', 32, y1, '24px system-ui, sans-serif', '#ffffff');
-      text('Room surfaces overlay', 32, y1 + 54, '24px system-ui, sans-serif', '#ffffff');
-      text('Saved automatically on this headset.', 360, 662, '20px system-ui, sans-serif', '#7f8bb8');
+      text('Room surfaces overlay', 32, y1 + WROW, '24px system-ui, sans-serif', '#ffffff');
+      text('Saved automatically on this headset.', 360, 664, '20px system-ui, sans-serif', '#7f8bb8');
     } else this.drawHand(ctx, W, text);
   }
 
@@ -185,20 +187,20 @@ export class Menu {
     ['left', 'right'].forEach((id, c) => {
       const cfg = settings.hands[id], x = 40 + c * 480;
       text(`${id.toUpperCase()} HAND: ${cfg.element.toUpperCase()}`, x, 290, 'bold 28px system-ui, sans-serif', COLORS[cfg.element]);
-      ['emit', 'empower', 'redirect', 'cool', 'cycle'].forEach((a, i) => {
-        text(INPUT_LABEL[cfg[kind][a]], x, 336 + i * 36, 'bold 22px system-ui, sans-serif', '#ffd24a');
-        text(ACTION_LABEL[a], x + 210, 336 + i * 36, '22px system-ui, sans-serif', '#ffffff');
+      ['emit', 'empower', 'redirect', 'cool', 'cycle', 'sweep'].forEach((a, i) => {
+        text(INPUT_LABEL[cfg[kind][a]], x, 330 + i * 34, 'bold 21px system-ui, sans-serif', '#ffd24a');
+        text(ACTION_LABEL[a], x + 190, 330 + i * 34, '22px system-ui, sans-serif', '#ffffff');
       });
     });
-    text(`Menu button: on your ${settings.menuHand} ${this.d.getScheme() === 'hands' ? 'hand (look at the back of it)' : 'controller'}`, W / 2, 545, '22px system-ui, sans-serif', '#9aa3c8', 'center');
+    text(`Menu button: on your ${settings.menuHand} ${this.d.getScheme() === 'hands' ? 'hand (look at the back of it)' : 'controller'}`, W / 2, 553, '22px system-ui, sans-serif', '#9aa3c8', 'center');
   }
 
   drawHand(ctx, W, text) {
     const id = this.tab, cfg = settings.hands[id];
     text('Element', 32, 126, 'bold 26px system-ui, sans-serif', COLORS[cfg.element]);
-    ACTIONS.forEach((a, i) => text(ACTION_LABEL[a], 32, 172 + i * 54 + 23, '24px system-ui, sans-serif', '#ffffff'));
-    text('Hold on', 32, 172 + 6 * 54 + 27, '24px system-ui, sans-serif', '#ffffff');
-    text(`Tap < > or the box to change. Gestures: ${this.kind() === 'hand' ? 'pinch with thumb + finger, fist, open palm.' : 'trigger, grip, A/X, B/Y, stick click.'}`, 740, 642, '17px system-ui, sans-serif', '#7f8bb8', 'center');
+    ACTIONS.forEach((a, i) => text(ACTION_LABEL[a], 32, 172 + i * ROW + 21, '24px system-ui, sans-serif', '#ffffff'));
+    text('Hold on', 32, 172 + ACTIONS.length * ROW + 23, '24px system-ui, sans-serif', '#ffffff');
+    text(`Tap < > or the box to change. Gestures: ${this.kind() === 'hand' ? 'pinch with thumb + finger, fist, open palm.' : 'trigger, grip, A/X, B/Y, stick click.'}`, W / 2, 594, '18px system-ui, sans-serif', '#7f8bb8', 'center');
   }
 
   drawBadge(ctx, p) {

@@ -16,7 +16,7 @@ export class Caster {
     this.cfg = settings.hands[id];   // live per-hand settings (element + bindings), edited by the menu
     this.source = 'none';          // 'hand' | 'controller' | 'mouse' | 'none'
     this.tracked = false;
-    this.emit = this.empower = this.redirect = this.cool = false;
+    this.emit = this.empower = this.redirect = this.cool = this.sweep = false;
     this.latch = { emit: false, empower: false, redirect: false, cool: false }; // on-screen / in-world toggle buttons
     this.cycle = false;            // one-frame "next element" request
     this.menuPressed = false;      // one-frame "open/close menu" request
@@ -28,6 +28,8 @@ export class Caster {
     this.palmNormal = new THREE.Vector3(0, 1, 0);
     this.wrist = new THREE.Vector3();
     this.indexTip = new THREE.Vector3();
+    this.vel = new THREE.Vector3();      // hand velocity (m/s), used to push elements
+    this._prev = new THREE.Vector3(); this._hasPrev = false;
     this.grip = new THREE.Vector3();
     this.gripQuat = new THREE.Quaternion();
   }
@@ -129,6 +131,7 @@ export class InputManager {
       if (slot.kind === 'hand') this.updateHand(slot, caster, dt, head);
       else if (slot.kind === 'controller') this.updateController(slot, caster, dt);
     }
+    for (const c of Object.values(this.casters)) trackVelocity(c, dt);
   }
 
   updateHand(slot, caster, dt, head) {
@@ -140,12 +143,12 @@ export class InputManager {
     slot.ray.visible = false;
     caster.source = 'hand';
     caster.tracked = out.tracked;
-    if (!out.tracked) { caster.emit = caster.empower = caster.redirect = caster.cool = false; slot.handMesh.visible = false; return; }
+    if (!out.tracked) { caster.emit = caster.empower = caster.redirect = caster.cool = caster.sweep = false; slot.handMesh.visible = false; return; }
 
     // gestures -> actions, through the player's bindings
     const bind = caster.cfg.hand, g = out.g;
-    const on = (action) => { const k = GESTURE_KEY[bind[action]]; return !!(k && g[k]); };
-    caster.emit = on('emit'); caster.empower = on('empower'); caster.redirect = on('redirect'); caster.cool = on('cool');
+    const on = (action) => { if (bind[action] === 'always') return true; const k = GESTURE_KEY[bind[action]]; return !!(k && g[k]); };
+    caster.emit = on('emit'); caster.empower = on('empower'); caster.redirect = on('redirect'); caster.cool = on('cool'); caster.sweep = on('sweep');
     this.edges(slot, caster, on('cycle'), on('menu'), dt);
     caster.palm.copy(out.palm); caster.palmNormal.copy(out.palmNormal); caster.wrist.copy(out.wrist);
     caster.emitPos.copy(out.emitPos); caster.emitDir.copy(out.emitDir);
@@ -202,8 +205,8 @@ export class InputManager {
 
     const bind = caster.cfg.ctrl;
     const state = { trigger, grip: squeeze, a: btnA, b: btnB, stick };
-    const on = (action) => !!state[bind[action]];
-    caster.emit = on('emit'); caster.redirect = on('redirect'); caster.empower = on('empower'); caster.cool = on('cool');
+    const on = (action) => bind[action] === 'always' || !!state[bind[action]];
+    caster.emit = on('emit'); caster.redirect = on('redirect'); caster.empower = on('empower'); caster.cool = on('cool'); caster.sweep = on('sweep');
     this.edges(slot, caster, on('cycle'), on('menu'), dt);
 
     // visible pointer ray, coloured by element
@@ -237,6 +240,20 @@ export class InputManager {
   get anyTracked() { return this.casters.left.tracked || this.casters.right.tracked; }
   get usingControllers() { return this.slots.some((s) => s.kind === 'controller'); }
   get usingHands() { return this.slots.some((s) => s.kind === 'hand'); }
+}
+
+// Smoothed hand velocity from the palm / controller position. Tiny jitter is ignored.
+export function trackVelocity(c, dt) {
+  if (!c.tracked || dt <= 0.0005) { c._hasPrev = false; c.vel.set(0, 0, 0); return; }
+  if (c._hasPrev) {
+    const k = 0.4;
+    const rx = (c.palm.x - c._prev.x) / dt, ry = (c.palm.y - c._prev.y) / dt, rz = (c.palm.z - c._prev.z) / dt;
+    c.vel.x += (rx - c.vel.x) * k; c.vel.y += (ry - c.vel.y) * k; c.vel.z += (rz - c.vel.z) * k;
+    const s = c.vel.length();
+    if (s < 0.08) c.vel.set(0, 0, 0);
+    else if (s > 4) c.vel.multiplyScalar(4 / s);
+  }
+  c._prev.copy(c.palm); c._hasPrev = true;
 }
 
 function makeRay() {
@@ -273,7 +290,7 @@ export class FlatInput {
     const r = this.dom.getBoundingClientRect();
     this.ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
   }
-  update() {
+  update(dt = 0.016) {
     const c = this.caster;
     if (!this.enabled) { c.tracked = false; return; }
     this.ray.setFromCamera(this.ndc, this.camera);
@@ -286,7 +303,9 @@ export class FlatInput {
     c.emit = this.keys.has('KeyQ') || this.pointerDown;
     c.empower = this.keys.has('Space');
     c.redirect = this.keys.has('KeyR');
+    c.sweep = true;
     c.cool = this.keys.has('KeyB');
+    trackVelocity(c, dt);
     if (this.keys.has('KeyE')) { if (!this._e) { c.nextElement(); this._e = true; } } else this._e = false;
   }
 }

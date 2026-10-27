@@ -2,22 +2,24 @@
 // Saved in localStorage so they survive reloads.
 import { CFG } from './config.js';
 
-export const ACTIONS = ['emit', 'empower', 'redirect', 'cool', 'cycle', 'menu'];
+export const ACTIONS = ['emit', 'empower', 'redirect', 'cool', 'cycle', 'sweep', 'menu'];
 export const ACTION_LABEL = {
   emit: 'Cast element',
   empower: 'Empower (grow / heat)',
   redirect: 'Redirect (pull)',
   cool: 'Cool water',
   cycle: 'Switch element',
+  sweep: 'Sweep (hand motion)',
   menu: 'Open menu',
 };
 
-export const HAND_INPUTS = ['pinch-index', 'pinch-middle', 'pinch-ring', 'pinch-pinky', 'fist', 'palm', 'none'];
-export const CTRL_INPUTS = ['trigger', 'grip', 'a', 'b', 'stick', 'none'];
+export const HAND_INPUTS = ['pinch-index', 'pinch-middle', 'pinch-ring', 'pinch-pinky', 'fist', 'palm', 'always', 'none'];
+export const CTRL_INPUTS = ['trigger', 'grip', 'a', 'b', 'stick', 'always', 'none'];
 export const INPUT_LABEL = {
   'pinch-index': 'Pinch: index', 'pinch-middle': 'Pinch: middle', 'pinch-ring': 'Pinch: ring', 'pinch-pinky': 'Pinch: pinky',
   fist: 'Fist', palm: 'Open palm',
   trigger: 'Trigger', grip: 'Grip', a: 'A / X button', b: 'B / Y button', stick: 'Stick click',
+  always: 'Always on',
   none: '- none -',
 };
 // gesture name -> flag name produced by gestures.js
@@ -26,8 +28,9 @@ export const GESTURE_KEY = {
   fist: 'fist', palm: 'palm',
 };
 
-const defHand = () => ({ emit: 'pinch-index', empower: 'fist', redirect: 'palm', cool: 'pinch-middle', cycle: 'pinch-ring', menu: 'none' });
-const defCtrl = () => ({ emit: 'trigger', empower: 'a', redirect: 'grip', cool: 'b', cycle: 'stick', menu: 'none' });
+// open palm is neutral by default now: moving your hand pushes elements instead (sweep)
+const defHand = () => ({ emit: 'pinch-index', empower: 'fist', redirect: 'none', cool: 'pinch-middle', cycle: 'pinch-ring', sweep: 'always', menu: 'none' });
+const defCtrl = () => ({ emit: 'trigger', empower: 'a', redirect: 'grip', cool: 'b', cycle: 'stick', sweep: 'always', menu: 'none' });
 
 // Tunables shown in the WORLD tab: [CFG key, label, min, max, step, decimals]
 export const TUNABLES = [
@@ -37,6 +40,8 @@ export const TUNABLES = [
   ['lifeScale', 'Lifetime multiplier', 0.5, 4, 0.5, 1],
   ['gravity', 'Water gravity', 0.5, 6, 0.5, 1],
   ['reach', 'Empower / cool reach (m)', 0.3, 1.5, 0.1, 1],
+  ['sweepGain', 'Hand push strength', 0, 3, 0.25, 2],
+  ['sweepRadius', 'Hand push radius (m)', 0.2, 0.8, 0.1, 1],
   ['maxParticles', 'Particle cap', 200, 900, 50, 0],
 ];
 const TUNABLE_DEFAULTS = {};
@@ -64,6 +69,7 @@ export function loadSettings() {
     const r = raw.hands && raw.hands[id];
     if (!r) continue;
     if (['fire', 'water', 'air'].includes(r.element)) settings.hands[id].element = r.element;
+    if (r.hand && r.hand.redirect === 'palm') r.hand.redirect = 'none';   // migrate: open palm is neutral now
     for (const [kind, list] of [['hand', HAND_INPUTS], ['ctrl', CTRL_INPUTS]]) {
       for (const a of ACTIONS) if (r[kind] && list.includes(r[kind][a])) settings.hands[id][kind][a] = r[kind][a];
     }

@@ -8,7 +8,7 @@
 import { S, STEP } from './config.js';
 
 const rnd = Math.random;
-const COMPRESS_DRAG = 0.004;     // fire game used 0.01 per overlap per frame; softer in 3D where clumps are looser
+const MAX_SPEED = 3.5;           // m/s cap for pushed elements
 const FIRE_START = 25 * S;
 const FIRE_MAX = 0.08;
 const EMPOWER_GROW = 2 * S;      // "size += 2" in the fire game
@@ -25,6 +25,12 @@ class Particle {
     this.r = 1; this.g = 1; this.b = 1; this.a = 1;
     this.px = NaN; this.py = 0; this.pz = 0;
     this.dead = false;
+  }
+  // add velocity (m/s), capped
+  kick(dx, dy, dz) {
+    this.vx += dx; this.vy += dy; this.vz += dz;
+    const s2 = this.vx * this.vx + this.vy * this.vy + this.vz * this.vz;
+    if (s2 > MAX_SPEED * MAX_SPEED) { const k = MAX_SPEED / Math.sqrt(s2); this.vx *= k; this.vy *= k; this.vz *= k; }
   }
 }
 
@@ -55,8 +61,6 @@ export class Fire extends Particle {
   constructor(x, y, z) {
     super('fire', x, y, z);
     this.size = FIRE_START;
-    this.sx = 0; this.sy = 0; this.sz = 0;  // per-step redirect velocity (fire game: speedX/speedY)
-    this.mult = 0;                          // fire game: speedMultipler
     this.power = 0;
     this.colorize(10);
   }
@@ -64,23 +68,23 @@ export class Fire extends Particle {
   update(w) {
     this.findPower(w);
     this.colorize(w.cfg.changeRate);
-    this.x += this.sx * this.mult;
-    this.y += this.sy * this.mult;
-    this.z += this.sz * this.mult;
+    // real velocity (m/s): it survives compression, and is only changed by redirect, hand pushes, drag and walls
+    this.x += this.vx * STEP; this.y += this.vy * STEP; this.z += this.vz * STEP;
+    const drag = w.cfg.fireDrag;
+    this.vx *= drag; this.vy *= drag; this.vz *= drag;
     // fire game: -2% per frame. lifeScale stretches that (2 = lasts twice as long)
     this.size *= w.fireDecay;
-    this.mult *= 0.985;
     if (this.size <= 0.2 * S) this.dead = true;
     if (collideEnv(this, w)) this.bounce(w);
   }
 
   // flames shoved against a wall lose their inward speed and kick back off it
   bounce(w) {
-    const sn = this.sx * H.nx + this.sy * H.ny + this.sz * H.nz;
-    if (sn < 0) {
-      const k = 1.35 * sn;
-      this.sx -= k * H.nx; this.sy -= k * H.ny; this.sz -= k * H.nz;
-      if (-sn * this.mult > 0.004 && Math.random() < 0.25) w.spark(this.x, this.y, this.z, 1, 0.6, 0.2, 1, 0.4);
+    const vn = this.vx * H.nx + this.vy * H.ny + this.vz * H.nz;
+    if (vn < 0) {
+      const k = 1.35 * vn;
+      this.vx -= k * H.nx; this.vy -= k * H.ny; this.vz -= k * H.nz;
+      if (-vn > 0.25 && Math.random() < 0.25) w.spark(this.x, this.y, this.z, 1, 0.6, 0.2, 1, 0.4);
     }
   }
 
@@ -99,7 +103,6 @@ export class Fire extends Particle {
 
       if (q.type === 'fire') {
         power++;
-        this.mult = Math.max(0, this.mult - COMPRESS_DRAG);
         let nx, ny, nz;
         if (dist < 1e-6) { randomDir(_d); nx = _d[0]; ny = _d[1]; nz = _d[2]; }
         else { nx = dx / dist; ny = dy / dist; nz = dz / dist; }
@@ -136,12 +139,13 @@ export class Fire extends Particle {
     this.size = Math.min(FIRE_MAX, this.size + EMPOWER_GROW);
   }
 
-  // Fire game redirectFlame(): speed = distance / (duration/16) per frame, multiplier reset to 1.05
-  redirect(tx, ty, tz) {
-    this.sx = (tx - this.x) / 62.5;
-    this.sy = (ty - this.y) / 62.5;
-    this.sz = (tz - this.z) / 62.5;
-    this.mult = 1.05;
+  // Fire game redirectFlame(): fly toward the target, travelling ~1.12x the distance before drag stops it.
+  // (the fire game set a per-frame speed of d/62.5 and decayed it 0.985/frame; same total travel here)
+  redirect(tx, ty, tz, drag = 0.988) {
+    const k = 1.12 * (1 - drag) * 60;
+    this.vx = (tx - this.x) * k;
+    this.vy = (ty - this.y) * k;
+    this.vz = (tz - this.z) * k;
   }
 }
 
@@ -180,7 +184,7 @@ export class Water extends Particle {
     } else {
       this.vy -= c.gravity * STEP;
       this.x += this.vx * STEP; this.y += this.vy * STEP; this.z += this.vz * STEP;
-      this.vx *= 0.98; this.vz *= 0.98; this.vy *= 0.999;
+      this.vx *= 0.995; this.vz *= 0.995; this.vy *= 0.999;   // fire game used 0.98: water now keeps its momentum
 
       if (this.y - this.size <= c.floorY) {
         this.y = c.floorY + this.size;
@@ -420,7 +424,23 @@ export class ParticleWorld {
         const l = Math.hypot(dx, dy, dz) || 1;
         const sp = Math.hypot(p.vx, p.vy, p.vz) || 1.2;
         p.vx = dx / l * sp; p.vy = dy / l * sp; p.vz = dz / l * sp;
-      } else p.redirect(tx, ty, tz);
+      } else if (element === 'fire') p.redirect(tx, ty, tz, this.cfg.fireDrag);
+      else p.redirect(tx, ty, tz);
+    }
+  }
+
+  // Hand sweep: moving your hand (velocity hx,hy,hz in m/s) pushes elements of this type that are near it.
+  // The push is an impulse, so sweeping the opposite way by the same amount cancels it out.
+  push(element, cx, cy, cz, hx, hy, hz, radius, gain, dt) {
+    if (gain <= 0 || Math.hypot(hx, hy, hz) < 0.05) return;
+    const k = 4 * gain * dt, r2 = radius * radius;
+    for (const p of this.list) {
+      if (p.type !== element || p.isIce) continue;
+      const dx = p.x - cx, dy = p.y - cy, dz = p.z - cz;
+      const d2 = dx * dx + dy * dy + dz * dz;
+      if (d2 > r2) continue;
+      const w = 1 - Math.sqrt(d2) / radius;
+      p.kick(hx * k * w, hy * k * w, hz * k * w);
     }
   }
 

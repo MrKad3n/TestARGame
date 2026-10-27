@@ -173,6 +173,7 @@ export class Game {
     tick('emit', c.wantsEmit, CFG.burstInterval, () => w.emit(c.element, c.emitPos.x, c.emitPos.y, c.emitPos.z, c.emitDir.x, c.emitDir.y, c.emitDir.z));
     tick('empower', c.wantsEmpower, CFG.actionInterval, () => w.empower(c.element, c.emitPos.x, c.emitPos.y, c.emitPos.z));
     tick('redirect', c.wantsRedirect, CFG.actionInterval, () => { this.redirectTarget(c, _a); w.redirect(c.element, _a.x, _a.y, _a.z); });
+    if (c.sweep && CFG.sweepGain > 0) w.push(c.element, c.palm.x, c.palm.y, c.palm.z, c.vel.x, c.vel.y, c.vel.z, CFG.sweepRadius, CFG.sweepGain, dt);
     tick('cool', c.wantsCool, CFG.actionInterval, () => w.cool(c.element, c.emitPos.x, c.emitPos.y, c.emitPos.z));
   }
 
