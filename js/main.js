@@ -7,6 +7,7 @@ import { Game } from './game.js';
 import { Environment } from './environment.js';
 import { UIManager } from './ui.js';
 import { Menu } from './menu.js';
+import { Studio } from './studio.js';
 import { settings, loadSettings } from './settings.js';
 
 loadCfgFromUrl();
@@ -74,7 +75,15 @@ const menu = new Menu(ui, {
   getScheme: () => scheme,
   onStart: () => startGame(),
   place: (mesh) => placeMenu(mesh),
+  openStudio: (hand) => { menu.close(); studio.open(hand); },
 });
+const studio = new Studio(ui, {
+  input,
+  getScheme: () => scheme,
+  place: (mesh) => placeMenu(mesh),
+  onClose: () => menu.open(),
+});
+studio.panel.visible = false;
 menu.panel.visible = false;
 menu.badge.mesh.scale.setScalar(0.8);
 ui.onClick = (ptr) => { if (ptr.slot) input.haptic(ptr.slot, 0.3, 30); };
@@ -172,9 +181,9 @@ function loop() {
   if (inXR) {
     const frame = renderer.xr.getFrame();
     if (frame) { try { env.updateFrame(frame, renderer.xr.getReferenceSpace(), boundsPoints); } catch (err) { console.warn('environment', err); } }
-    input.update(dt, head);
+    input.update(dt, head, headDir);
     if (needMenuPlace && head.lengthSq() > 0) { needMenuPlace = false; menu.open('play'); }
-    for (const c of Object.values(input.casters)) if (c.menuPressed) menu.toggle();
+    if (Object.values(input.casters).some((c) => c.pressed.menu)) { if (studio.isOpen) studio.close(); else menu.toggle(); }
   } else {
     flat.update(dt);
   }
@@ -186,6 +195,7 @@ function loop() {
     placeBadge();
     ui.update(dt, input.pointers);
     menu.tick(dt);
+    studio.tick(dt);
     ui.redrawDirty();
   } else {
     hudTimer -= dt;
@@ -217,7 +227,7 @@ async function enterXR(kind) {
     boundsPoints = null;
     // Quest 2 fallback: Guardian boundary (only if the session granted bounded-floor)
     session.requestReferenceSpace('bounded-floor').then((s) => { boundsPoints = s.boundsGeometry && s.boundsGeometry.length ? s.boundsGeometry : null; }).catch(() => {});
-    for (const c of Object.values(input.casters)) { c.source = 'none'; c.tracked = false; c.emit = c.empower = c.redirect = c.cool = false; }
+    for (const c of Object.values(input.casters)) { c.source = 'none'; c.tracked = false; c.clearActions(); }
     intro.style.display = 'none';
     flatUi.style.display = 'none';
     const ar = kind === 'immersive-ar';
@@ -241,6 +251,7 @@ function onXREnd() {
   input.casters.left.source = 'none';
   for (const c of Object.values(input.casters)) c.tracked = false;
   menu.close(); menu.badge.visible = false;
+  studio.isOpen = false; studio.panel.visible = false; studio.rec = null; input.endCapture();
   renderer.setClearColor(0x05060c, 1);
   scene.background = null;
   grid.visible = true;
@@ -330,4 +341,4 @@ function updateFlatHud() {
 detect();
 
 // handy for debugging / tests
-window.__rift = { env, THREE, CFG, world, game, input, renderer, scene, camera, startGame, menu, settings, ui };
+window.__rift = { env, THREE, CFG, world, game, input, renderer, scene, camera, startGame, menu, studio, settings, ui };

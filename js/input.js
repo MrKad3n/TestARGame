@@ -1,12 +1,16 @@
 // Turns whatever the player is using into two "casters" (left / right):
-//   * Quest 3 hand tracking  -> gestures (gestures.js)
-//   * Quest 2 / Touch controllers -> buttons (trigger, grip, A/X, B/Y, thumbstick click)
+//   * Quest 3 hand tracking  -> gestures (gestures.js one-hand, pairs.js two-hand, custom recorded)
+//   * Quest 2 / Touch controllers -> buttons
 //   * Flat screen preview -> mouse + keyboard (same keys as the fire game: Q, Space, R, B)
+// What each gesture/button does is set by the player's bindings (settings.js, Gesture Studio).
 // The game only ever looks at the Caster objects, so it doesn't care which one is in use.
 import * as THREE from 'three';
-import { analyzeHand, newGestureState } from './gestures.js';
+import {
+  analyzeHand, newGestureState, newGestureFlags, pairFeatures, customActive, FEATURE_COUNT, PAIR_FEATURE_COUNT,
+} from './gestures.js';
+import { analyzePair, newPairState } from './pairs.js';
 import { ELEMENTS } from './particles.js';
-import { settings, GESTURE_KEY, saveSettings } from './settings.js';
+import { settings, custom, saveSettings, HOLD_ACTIONS, TAP_ACTIONS } from './settings.js';
 
 export const ELEMENT_COLORS = { fire: 0xff5a2a, water: 0x3fa9ff, air: 0xd8f4ff };
 
@@ -16,10 +20,14 @@ export class Caster {
     this.cfg = settings.hands[id];   // live per-hand settings (element + bindings), edited by the menu
     this.source = 'none';          // 'hand' | 'controller' | 'mouse' | 'none'
     this.tracked = false;
-    this.emit = this.empower = this.redirect = this.cool = this.sweep = false;
-    this.latch = { emit: false, empower: false, redirect: false, cool: false }; // on-screen / in-world toggle buttons
-    this.cycle = false;            // one-frame "next element" request
-    this.menuPressed = false;      // one-frame "open/close menu" request
+    this.act = {};                 // held actions: emit, empower, compress, pull, push, redirect, brake, cool, sweep
+    for (const a of HOLD_ACTIONS) this.act[a] = false;
+    this.pressed = {};             // one-frame tap actions: cycle, selFire, ..., dispel, menu
+    for (const a of TAP_ACTIONS) this.pressed[a] = false;
+    this.latch = { emit: false, empower: false, redirect: false, cool: false, compress: false, brake: false }; // menu toggle buttons
+    this.active = new Set();       // gesture / button ids active this frame (single-hand)
+    this.feat = new Array(FEATURE_COUNT).fill(0);
+    this.btn = { trigger: false, grip: false, a: false, b: false, stick: false };
     this.emitPos = new THREE.Vector3();
     this.emitDir = new THREE.Vector3(0, 0, -1);
     this.aimOrigin = new THREE.Vector3();
@@ -33,13 +41,19 @@ export class Caster {
     this.grip = new THREE.Vector3();
     this.gripQuat = new THREE.Quaternion();
   }
-  get wantsEmit() { return this.emit || this.latch.emit; }
-  get wantsEmpower() { return this.empower || this.latch.empower; }
-  get wantsRedirect() { return this.redirect || this.latch.redirect; }
-  get wantsCool() { return this.cool || this.latch.cool; }
+  want(action) { return !!(this.act[action] || this.latch[action]); }
+  get wantsEmit() { return this.want('emit'); }
+  get wantsEmpower() { return this.want('empower'); }
+  get wantsRedirect() { return this.want('redirect'); }
+  get wantsCool() { return this.want('cool'); }
+  get wide() { return this.active.has('palm'); }   // open palm: sweeping reaches farther / pushes harder
   get element() { return this.cfg.element; }
   set element(v) { this.cfg.element = v; saveSettings(); }
   nextElement() { this.element = ELEMENTS[(ELEMENTS.indexOf(this.element) + 1) % ELEMENTS.length]; }
+  clearActions() {
+    for (const a of HOLD_ACTIONS) this.act[a] = false;
+    for (const a of TAP_ACTIONS) this.pressed[a] = false;
+  }
 }
 
 const JOINTS = [
@@ -55,6 +69,7 @@ const _q = new THREE.Quaternion();
 const _s = new THREE.Vector3();
 const _p = new THREE.Vector3();
 const _fwd = new THREE.Vector3();
+const _hd = new THREE.Vector3(0, 0, -1);
 
 export class InputManager {
   constructor(renderer, scene) {
@@ -64,9 +79,13 @@ export class InputManager {
     this.casters = { left: new Caster('left'), right: new Caster('right') };
     this.slots = [];
     this.pointers = [];            // for the in-world UI: { id, kind:'ray'|'tip', origin, dir, pos, down }
+    this.pair = new Set();         // active two-hand gestures / chords this frame
+    this.pairState = newPairState();
+    this.customOn = {};            // custom gesture hysteresis: key -> bool
+    this.cap = null;               // gesture recorder: { mode, hand, frames }
     this.handTrackingSeen = false;
     this.controllerSeen = false;
-    this.onHaptic = null;
+    this._pairFeat = [];
 
     const handMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5, depthWrite: false });
     const sphere = new THREE.SphereGeometry(1, 8, 6);
@@ -79,11 +98,11 @@ export class InputManager {
 
       const slot = {
         i, ctrl, grip, hand, src: null, kind: 'none', handedness: 'none',
-        gesture: newGestureState(), prevButtons: [], stickLatch: false, edge: { cycle: false, menu: false }, cd: { cycle: 0, menu: 0 },
+        gesture: newGestureState(), edge: {}, cd: {},
         handMesh: new THREE.InstancedMesh(sphere, handMat.clone(), JOINTS.length),
         ray: makeRay(),
-        prevTipZ: null,
       };
+      for (const a of TAP_ACTIONS) { slot.edge[a] = false; slot.cd[a] = 0; }
       slot.handMesh.frustumCulled = false;
       slot.handMesh.visible = false;
       slot.ray.visible = false;
@@ -94,7 +113,7 @@ export class InputManager {
       this.slots.push(slot);
     }
     this._outHand = {
-      tracked: false, g: { pinchIndex: false, pinchMiddle: false, pinchRing: false, pinchPinky: false, fist: false, palm: false },
+      tracked: false, g: newGestureFlags(), feat: new Array(FEATURE_COUNT).fill(0),
       palm: new THREE.Vector3(), palmNormal: new THREE.Vector3(), wrist: new THREE.Vector3(),
       emitPos: new THREE.Vector3(), emitDir: new THREE.Vector3(0, 0, -1),
       aimOrigin: new THREE.Vector3(), aimDir: new THREE.Vector3(0, 0, -1), indexTip: new THREE.Vector3(),
@@ -108,29 +127,46 @@ export class InputManager {
     if (slot.kind === 'hand') this.handTrackingSeen = true;
     if (slot.kind === 'controller') this.controllerSeen = true;
     slot.gesture = newGestureState();
-    slot.prevButtons = [];
-    slot.edge = { cycle: false, menu: false };
+    for (const a of TAP_ACTIONS) slot.edge[a] = false;
   }
 
   onDisconnected(slot) {
     const c = this.casters[slot.handedness];
-    if (c) { c.tracked = false; c.source = 'none'; c.emit = c.empower = c.redirect = c.cool = false; }
+    if (c) { c.tracked = false; c.source = 'none'; c.clearActions(); c.active.clear(); }
     slot.src = null; slot.kind = 'none';
     slot.handMesh.visible = false; slot.ray.visible = false;
   }
 
-  /** Call once per XR frame. head = world position of the headset. */
-  update(dt, head) {
-    this.pointers.length = 0;
-    for (const c of Object.values(this.casters)) { c.cycle = false; c.menuPressed = false; if (c.source !== 'mouse') c.tracked = false; }
+  // ---- gesture recorder (used by the Gesture Studio) ---------------------------------------
+  beginCapture(mode, hand) { this.cap = { mode, hand, frames: [] }; }
+  endCapture() { const c = this.cap; this.cap = null; return c ? c.frames : []; }
+  captureCount() { return this.cap ? this.cap.frames.length : 0; }
 
+  /** Call once per XR frame. head = world position of the headset, headDir = its forward vector. */
+  update(dt, head, headDir = _hd) {
+    this.pointers.length = 0;
+    for (const c of Object.values(this.casters)) {
+      c.clearActions();
+      if (c.source !== 'mouse') { c.tracked = false; c.active.clear(); }
+    }
+
+    // 1. read every device
     for (const slot of this.slots) {
       if (!slot.src) continue;
       const caster = this.casters[slot.handedness];
       if (!caster) continue;
       if (slot.kind === 'hand') this.updateHand(slot, caster, dt, head);
-      else if (slot.kind === 'controller') this.updateController(slot, caster, dt);
+      else if (slot.kind === 'controller') this.updateController(slot, caster);
     }
+    // 2. two-hand gestures / chords
+    this.updatePairs(dt, head, headDir);
+    // 3. gestures / buttons -> actions through the player's bindings
+    for (const slot of this.slots) {
+      const caster = slot.src && this.casters[slot.handedness];
+      if (caster && caster.tracked && (slot.kind === 'hand' || slot.kind === 'controller')) this.applyBindings(slot, caster, dt);
+    }
+    // 4. recorder
+    this.capture();
     for (const c of Object.values(this.casters)) trackVelocity(c, dt);
   }
 
@@ -143,13 +179,19 @@ export class InputManager {
     slot.ray.visible = false;
     caster.source = 'hand';
     caster.tracked = out.tracked;
-    if (!out.tracked) { caster.emit = caster.empower = caster.redirect = caster.cool = caster.sweep = false; slot.handMesh.visible = false; return; }
+    if (!out.tracked) { slot.handMesh.visible = false; return; }
 
-    // gestures -> actions, through the player's bindings
-    const bind = caster.cfg.hand, g = out.g;
-    const on = (action) => { if (bind[action] === 'always') return true; const k = GESTURE_KEY[bind[action]]; return !!(k && g[k]); };
-    caster.emit = on('emit'); caster.empower = on('empower'); caster.redirect = on('redirect'); caster.cool = on('cool'); caster.sweep = on('sweep');
-    this.edges(slot, caster, on('cycle'), on('menu'), dt);
+    for (const id in out.g) if (out.g[id]) caster.active.add(id);
+    for (let i = 0; i < FEATURE_COUNT; i++) caster.feat[i] = out.feat[i];
+    // custom one-hand gestures
+    for (const def of custom) {
+      if (def.mode !== 'single') continue;
+      const key = slot.handedness + def.id;
+      const on = customActive(def, caster.feat, !!this.customOn[key]);
+      this.customOn[key] = on;
+      if (on) caster.active.add('custom:' + def.id);
+    }
+
     caster.palm.copy(out.palm); caster.palmNormal.copy(out.palmNormal); caster.wrist.copy(out.wrist);
     caster.emitPos.copy(out.emitPos); caster.emitDir.copy(out.emitDir);
     caster.aimOrigin.copy(out.aimOrigin); caster.aimDir.copy(out.aimDir);
@@ -158,7 +200,7 @@ export class InputManager {
     // visual joints
     const color = new THREE.Color(ELEMENT_COLORS[caster.element]);
     slot.handMesh.material.color.copy(color).lerp(new THREE.Color(0xffffff), 0.35);
-    slot.handMesh.material.opacity = caster.wantsEmit || caster.wantsEmpower || caster.wantsRedirect ? 0.85 : 0.45;
+    slot.handMesh.material.opacity = 0.45;
     let n = 0;
     for (const name of JOINTS) {
       const j = joints[name];
@@ -172,16 +214,15 @@ export class InputManager {
     slot.handMesh.instanceMatrix.needsUpdate = true;
     slot.handMesh.visible = n > 0;
 
-    // in-world UI: poke with the index fingertip of the hand that isn't pinching
-    if (!g.pinchIndex && !g.fist) this.pointers.push({ id: caster.id, kind: 'tip', pos: out.indexTip, down: false, slot });
+    // in-world UI: poke with the index fingertip of a hand that isn't pinching / fisting
+    if (!out.g['pinch-index'] && !out.g.fist) this.pointers.push({ id: caster.id, kind: 'tip', pos: out.indexTip, down: false, slot });
   }
 
-  updateController(slot, caster, dt) {
+  updateController(slot, caster) {
     const gp = slot.src.gamepad;
     slot.handMesh.visible = false;
     caster.source = 'controller';
     const grip = slot.grip, ctrl = slot.ctrl;
-    // grip may not exist yet on the first frame
     ctrl.updateWorldMatrix(true, false);
     ctrl.matrixWorld.decompose(_p, _q, _s);
     caster.tracked = !(_p.x === 0 && _p.y === 0 && _p.z === 0);
@@ -200,29 +241,74 @@ export class InputManager {
 
     const b = gp ? gp.buttons : [];
     const pressed = (k) => !!(b[k] && b[k].pressed);
-    const trigger = pressed(0), squeeze = pressed(1), stick = pressed(3), btnA = pressed(4), btnB = pressed(5);
-    const prev = slot.prevButtons;
-
-    const bind = caster.cfg.ctrl;
-    const state = { trigger, grip: squeeze, a: btnA, b: btnB, stick };
-    const on = (action) => bind[action] === 'always' || !!state[bind[action]];
-    caster.emit = on('emit'); caster.redirect = on('redirect'); caster.empower = on('empower'); caster.cool = on('cool'); caster.sweep = on('sweep');
-    this.edges(slot, caster, on('cycle'), on('menu'), dt);
+    caster.btn.trigger = pressed(0); caster.btn.grip = pressed(1); caster.btn.stick = pressed(3);
+    caster.btn.a = pressed(4); caster.btn.b = pressed(5);
+    for (const k in caster.btn) if (caster.btn[k]) caster.active.add(k);
 
     // visible pointer ray, coloured by element
     slot.ray.visible = true;
     slot.ray.position.copy(_p); slot.ray.quaternion.copy(_q);
     slot.ray.material.color.setHex(ELEMENT_COLORS[caster.element]);
 
-    this.pointers.push({ id: caster.id, kind: 'ray', origin: caster.aimOrigin, dir: caster.aimDir, down: trigger, slot });
+    this.pointers.push({ id: caster.id, kind: 'ray', origin: caster.aimOrigin, dir: caster.aimDir, down: caster.btn.trigger, slot });
   }
 
-  // rising-edge actions (switch element / open menu) with a short cooldown
-  edges(slot, caster, cycleOn, menuOn, dt) {
-    slot.cd.cycle = Math.max(0, slot.cd.cycle - dt); slot.cd.menu = Math.max(0, slot.cd.menu - dt);
-    if (cycleOn && !slot.edge.cycle && slot.cd.cycle <= 0) { caster.cycle = true; caster.nextElement(); slot.cd.cycle = 0.5; this.haptic(slot, 0.25, 40); }
-    if (menuOn && !slot.edge.menu && slot.cd.menu <= 0) { caster.menuPressed = true; slot.cd.menu = 0.5; }
-    slot.edge.cycle = cycleOn; slot.edge.menu = menuOn;
+  updatePairs(dt, head, headDir) {
+    this.pair.clear();
+    const L = this.casters.left, R = this.casters.right;
+    if (!(L.tracked && R.tracked)) { this.pairState.prevDist = null; return; }
+    if (L.source === 'hand' && R.source === 'hand') {
+      const a = { palm: L.palm, normal: L.palmNormal, has: (id) => L.active.has(id) };
+      const b = { palm: R.palm, normal: R.palmNormal, has: (id) => R.active.has(id) };
+      analyzePair(a, b, head, headDir, this.pairState, this.pair, dt);
+      let feat = null;
+      for (const def of custom) {
+        if (def.mode !== 'pair') continue;
+        if (!feat) feat = pairFeatures(L.feat, R.feat, L.palm, L.palmNormal, R.palm, R.palmNormal, this._pairFeat);
+        const on = customActive(def, feat, !!this.customOn['pair' + def.id]);
+        this.customOn['pair' + def.id] = on;
+        if (on) this.pair.add('custom:' + def.id);
+      }
+    } else if (L.source === 'controller' && R.source === 'controller') {
+      if (L.btn.trigger && R.btn.trigger) this.pair.add('both-triggers');
+      if (L.btn.grip && R.btn.grip) this.pair.add('both-grips');
+      if (L.btn.stick && R.btn.stick) this.pair.add('both-sticks');
+    }
+  }
+
+  isOn(caster, id) {
+    if (id === 'always') return true;
+    if (id === 'none' || !id) return false;
+    return caster.active.has(id) || this.pair.has(id);
+  }
+
+  applyBindings(slot, caster, dt) {
+    const bind = caster.cfg[slot.kind === 'hand' ? 'hand' : 'ctrl'];
+    for (const a of HOLD_ACTIONS) caster.act[a] = this.isOn(caster, bind[a]);
+    for (const a of TAP_ACTIONS) {
+      slot.cd[a] = Math.max(0, slot.cd[a] - dt);
+      const on = this.isOn(caster, bind[a]);
+      if (on && !slot.edge[a] && slot.cd[a] <= 0) { caster.pressed[a] = true; slot.cd[a] = 0.5; }
+      slot.edge[a] = on;
+    }
+    const p = caster.pressed;
+    if (p.cycle) caster.nextElement();
+    if (p.selFire) caster.element = 'fire';
+    if (p.selWater) caster.element = 'water';
+    if (p.selAir) caster.element = 'air';
+    if (p.cycle || p.selFire || p.selWater || p.selAir) this.haptic(slot, 0.25, 40);
+  }
+
+  capture() {
+    const cap = this.cap;
+    if (!cap) return;
+    const L = this.casters.left, R = this.casters.right;
+    if (cap.mode === 'single') {
+      const c = this.casters[cap.hand];
+      if (c.tracked && c.source === 'hand') cap.frames.push(c.feat.slice());
+    } else if (L.tracked && R.tracked && L.source === 'hand' && R.source === 'hand') {
+      cap.frames.push(pairFeatures(L.feat, R.feat, L.palm, L.palmNormal, R.palm, R.palmNormal, []).slice());
+    }
   }
 
   haptic(slot, intensity = 0.3, ms = 40) {
@@ -251,7 +337,7 @@ export function trackVelocity(c, dt) {
     c.vel.x += (rx - c.vel.x) * k; c.vel.y += (ry - c.vel.y) * k; c.vel.z += (rz - c.vel.z) * k;
     const s = c.vel.length();
     if (s < 0.08) c.vel.set(0, 0, 0);
-    else if (s > 4) c.vel.multiplyScalar(4 / s);
+    else if (s > 8) c.vel.multiplyScalar(8 / s);
   }
   c._prev.copy(c.palm); c._hasPrev = true;
 }
@@ -300,12 +386,18 @@ export class FlatInput {
     c.palm.copy(c.emitPos); c.indexTip.copy(c.emitPos); c.aimOrigin.copy(c.emitPos);
     c.emitDir.copy(this.ray.ray.direction);
     c.aimDir.copy(this.ray.ray.direction);
-    c.emit = this.keys.has('KeyQ') || this.pointerDown;
-    c.empower = this.keys.has('Space');
-    c.redirect = this.keys.has('KeyR');
-    c.sweep = true;
-    c.cool = this.keys.has('KeyB');
+    const a = c.act;
+    a.emit = this.keys.has('KeyQ') || this.pointerDown;
+    a.empower = this.keys.has('Space');
+    a.redirect = this.keys.has('KeyR');
+    a.cool = this.keys.has('KeyB');
+    a.compress = this.keys.has('KeyC');
+    a.pull = this.keys.has('KeyG');
+    a.push = this.keys.has('KeyV');
+    a.brake = this.keys.has('KeyX');
+    a.sweep = true;
     trackVelocity(c, dt);
     if (this.keys.has('KeyE')) { if (!this._e) { c.nextElement(); this._e = true; } } else this._e = false;
+    c.pressed.dispel = this.keys.has('KeyZ') && !this._z; this._z = this.keys.has('KeyZ');
   }
 }

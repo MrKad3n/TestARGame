@@ -86,7 +86,7 @@ export class Game {
     scene.add(this.root);
     this.enemies = [];
     this.state = 'menu';            // menu | playing | over
-    this.wave = 0; this.score = 0; this.lives = 5; this.kills = 0; this.best = Number(localStorage.getItem('rift-best') || 0);
+    this.wave = 0; this.score = 0; this.lives = 5; this.kills = 0; this.best = typeof localStorage !== 'undefined' ? Number(localStorage.getItem('rift-best') || 0) : 0;
     this.toSpawn = 0; this.spawnTimer = 0; this.nextWaveTimer = 0;
     this.yaw0 = 0;
     this.banner = ''; this.bannerT = 0;
@@ -159,7 +159,7 @@ export class Game {
     return out.copy(c.aimOrigin).addScaledVector(c.aimDir, CFG.aimDistance);
   }
 
-  // ---- per-caster spell driver (fire game: Q / Space / R / B) --------------
+  // ---- per-caster spell driver (fire game: Q / Space / R / B + the new actions) ----------------
   castFor(c, dt) {
     const t = this.timers[c.id] || (this.timers[c.id] = { emit: 0, empower: 0, redirect: 0, cool: 0 });
     if (!c.tracked) { t.emit = t.empower = t.redirect = t.cool = 0; return; }
@@ -170,16 +170,47 @@ export class Game {
       let guard = 0;
       while (t[name] >= interval && guard++ < 4) { t[name] -= interval; fn(); }
     };
-    tick('emit', c.wantsEmit, CFG.burstInterval, () => w.emit(c.element, c.emitPos.x, c.emitPos.y, c.emitPos.z, c.emitDir.x, c.emitDir.y, c.emitDir.z));
-    tick('empower', c.wantsEmpower, CFG.actionInterval, () => w.empower(c.element, c.emitPos.x, c.emitPos.y, c.emitPos.z));
-    tick('redirect', c.wantsRedirect, CFG.actionInterval, () => { this.redirectTarget(c, _a); w.redirect(c.element, _a.x, _a.y, _a.z); });
-    if (c.sweep && CFG.sweepGain > 0) w.push(c.element, c.palm.x, c.palm.y, c.palm.z, c.vel.x, c.vel.y, c.vel.z, CFG.sweepRadius, CFG.sweepGain, dt);
-    tick('cool', c.wantsCool, CFG.actionInterval, () => w.cool(c.element, c.emitPos.x, c.emitPos.y, c.emitPos.z));
+    tick('emit', c.want('emit'), CFG.burstInterval, () => w.emit(c.element, c.emitPos.x, c.emitPos.y, c.emitPos.z, c.emitDir.x, c.emitDir.y, c.emitDir.z));
+    tick('empower', c.want('empower'), CFG.actionInterval, () => w.empower(c.element, c.emitPos.x, c.emitPos.y, c.emitPos.z));
+    tick('redirect', c.want('redirect'), CFG.actionInterval, () => { this.redirectTarget(c, _a); w.redirect(c.element, _a.x, _a.y, _a.z); });
+    tick('cool', c.want('cool'), CFG.actionInterval, () => w.cool(c.element, c.emitPos.x, c.emitPos.y, c.emitPos.z));
+
+    // continuous actions
+    if (c.act.sweep && CFG.sweepGain > 0) {
+      // an open palm reaches farther and pushes harder
+      const wide = c.wide;
+      w.push(c.element, c.palm.x, c.palm.y, c.palm.z, c.vel.x, c.vel.y, c.vel.z,
+        wide ? CFG.palmRadius : CFG.sweepRadius, CFG.sweepGain * (wide ? CFG.palmGain : 1), dt);
+    }
+    if (c.want('compress')) w.compress(c.element, c.palm.x, c.palm.y, c.palm.z, CFG.reach, dt);
+    if (c.want('push')) w.blast(c.element, c.palm.x, c.palm.y, c.palm.z, CFG.reach + 0.4, 14, dt);
+    if (c.want('brake')) w.brake(c.element, c.palm.x, c.palm.y, c.palm.z, CFG.reach, dt);
+
+    // taps
+    if (c.pressed.dispel) w.dispel(c.element);
+  }
+
+  // "Pull in": any hand doing it drags the elements of BOTH hands toward the middle of your hands.
+  pullIn(casters, dt) {
+    let pulling = false;
+    for (const id in casters) if (casters[id].tracked && casters[id].want('pull')) pulling = true;
+    if (!pulling) return;
+    const els = new Set();
+    let n = 0, x = 0, y = 0, z = 0;
+    for (const id in casters) {
+      const c = casters[id];
+      if (!c.tracked) continue;
+      els.add(c.element);
+      x += c.palm.x; y += c.palm.y; z += c.palm.z; n++;
+    }
+    if (n === 0) return;
+    this.world.pull(els, x / n, y / n, z / n, CFG.pullStrength, dt);
   }
 
   update(dt, ctx) {
     const { head, casters, camQuat } = ctx;
     for (const id of Object.keys(casters)) this.castFor(casters[id], dt);
+    this.pullIn(casters, dt);
     this.world.update(dt);
 
     if (this.bannerT > 0) this.bannerT -= dt;

@@ -22,6 +22,10 @@ export const CFG = {
   reach: 0.8,         // empower / cool only affect particles within this distance of the hand
   sweepGain: 1,       // how strongly moving your hand pushes elements (0 = off)
   sweepRadius: 0.4,   // elements within this distance of the hand get pushed
+  maxSpeed: 8,        // m/s cap for any element (pushes, throws, pulls)
+  palmGain: 2.5,      // open-palm sweeping pushes this many times harder...
+  palmRadius: 1.0,    // ...and reaches this far (m)
+  pullStrength: 24,   // how hard 'pull in' drags elements toward your hands
   fireDrag: 0.988,    // fire keeps this fraction of its velocity each 60Hz step
   aimDistance: 1.4,   // how far in front of a palm / controller the "redirect" target sits
 };
@@ -37,4 +41,5 @@ export function loadCfgFromUrl() {
   num('gravity', 'gravity');
   num('life', 'lifeScale');
   num('sweep', 'sweepGain');
+  num('maxspeed', 'maxSpeed');
 }

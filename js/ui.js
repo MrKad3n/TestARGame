@@ -139,7 +139,9 @@ function drawButton(ctx, b, hover) {
   ctx.font = `bold ${b.font || 30}px system-ui, sans-serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText(typeof b.label === 'function' ? b.label() : b.label, b.x + b.w / 2, b.y + b.h / 2 + 2);
+  const label = typeof b.label === 'function' ? b.label() : b.label;
+  if (label) ctx.fillText(label, b.x + b.w / 2, b.y + b.h / 2 + 2);
+  if (b.after) b.after(ctx, b, hover, active);   // custom content drawn on top of the button
 }
 
 export function panelBackground(ctx, w, h, accent = '#ff7a3a') {

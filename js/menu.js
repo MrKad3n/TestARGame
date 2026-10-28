@@ -1,28 +1,29 @@
 // In-world menu, opened only by the small menu button on your wrist / controller.
 //   PLAY        start / resume, summary of what each hand does
-//   LEFT / RIGHT HAND   element, which gesture or button triggers each action, hold-toggles
-//   WORLD       particle tuning, which hand wears the menu button, room-mesh overlay
+//   LEFT / RIGHT HAND   element, summary of bindings, hold-toggles, shortcut into the Gesture Studio
+//   WORLD       particle + hand-push tuning, which hand wears the menu button, room-mesh overlay
+//   STUDIO      opens the Gesture Studio popup (studio.js): bind any gesture / two-hand gesture / recorded gesture to any action
 import { Panel, panelBackground, roundRect } from './ui.js';
 import { CFG } from './config.js';
 import { ELEMENTS } from './particles.js';
 import {
   settings, saveSettings, resetHand, resetAll,
-  ACTIONS, ACTION_LABEL, HAND_INPUTS, CTRL_INPUTS, INPUT_LABEL, TUNABLES,
+  ACTIONS, ACTION_LABEL, gestureLabel, TUNABLES, TUNABLE_PAGE,
 } from './settings.js';
 
 const COLORS = { fire: '#ff5a2a', water: '#3fa9ff', air: '#d8f4ff' };
-const TABS = [['play', 'PLAY'], ['left', 'LEFT HAND'], ['right', 'RIGHT HAND'], ['world', 'WORLD']];
-const ROW = 50;           // hand-tab row pitch
+const TABS = [['play', 'PLAY'], ['left', 'LEFT HAND'], ['right', 'RIGHT HAND'], ['world', 'WORLD'], ['studio', 'STUDIO']];
 const WROW = 44;          // world-tab row pitch
 const fmt = (n) => String(Math.floor(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 
 export class Menu {
   /**
-   * d = { game, input, env, getScheme(), onStart(), place(mesh) }
+   * d = { game, input, env, getScheme(), onStart(), place(mesh), openStudio(handId) }
    */
   constructor(ui, d) {
     this.d = d;
     this.tab = 'play';
+    this.worldPage = 0;
     this.isOpen = false;
     this.timer = 0;
     this.panel = ui.add(new Panel(1.0, 0.7, (ctx, p) => this.draw(ctx, p)));
@@ -38,7 +39,7 @@ export class Menu {
 
   // ---- open / close --------------------------------------------------------------
   open(tab) {
-    if (tab) this.tab = tab;
+    if (tab && tab !== 'studio') this.tab = tab;
     this.isOpen = true;
     this.build();
     this.d.place(this.panel.mesh);
@@ -68,10 +69,14 @@ export class Menu {
     const B = [];
     const d = this.d;
     TABS.forEach(([id, label], i) => B.push({
-      id: 'tab-' + id, x: 28 + i * 212, y: 16, w: 202, h: 58, label, font: 25, color: '#4fc3ff',
-      active: () => this.tab === id, onClick: () => { this.tab = id; this.build(); this.panel.dirty = true; },
+      id: 'tab-' + id, x: 24 + i * 172, y: 16, w: 164, h: 58, label, font: 21, color: id === 'studio' ? '#ffb02a' : '#4fc3ff',
+      active: () => this.tab === id,
+      onClick: () => {
+        if (id === 'studio') { d.openStudio(this.tab === 'left' ? 'left' : 'right'); return; }
+        this.tab = id; this.build(); this.panel.dirty = true;
+      },
     }));
-    B.push({ id: 'close', x: 890, y: 16, w: 82, h: 58, label: 'X', font: 30, color: '#ff6b8a', onClick: () => this.close() });
+    B.push({ id: 'close', x: 900, y: 16, w: 80, h: 58, label: 'X', font: 30, color: '#ff6b8a', onClick: () => this.close() });
 
     if (this.tab === 'play') {
       B.push({
@@ -94,37 +99,30 @@ export class Menu {
       id: 'el-' + el, x: 250 + i * 165, y: 98, w: 155, h: 56, label: el.toUpperCase(), font: 24, color: COLORS[el],
       active: () => cfg.element === el, onClick: () => { cfg.element = el; this.mark(); },
     }));
-    const kind = this.kind();
-    const list = kind === 'hand' ? HAND_INPUTS : CTRL_INPUTS;
-    ACTIONS.forEach((a, i) => {
-      const y = 172 + i * ROW;
-      const step = (dir) => () => {
-        const cur = list.indexOf(cfg[kind][a]);
-        cfg[kind][a] = list[(cur + dir + list.length) % list.length];
-        this.mark();
-      };
-      B.push({ id: `${a}-prev`, x: 470, y, w: 56, h: 42, label: '<', font: 28, color: '#ffd24a', onClick: step(-1) });
-      B.push({ id: `${a}-val`, x: 532, y, w: 262, h: 42, label: () => INPUT_LABEL[cfg[kind][a]], font: 24, color: '#ffffff', onClick: step(1) });
-      B.push({ id: `${a}-next`, x: 800, y, w: 56, h: 42, label: '>', font: 28, color: '#ffd24a', onClick: step(1) });
-    });
     // latch toggles: keep an action held without any gesture / button (great for Quest 2 or tired hands)
-    [['emit', 'CAST'], ['empower', 'HEAT'], ['redirect', 'PULL'], ['cool', 'COOL']].forEach(([k, label], i) => B.push({
-      id: 'latch-' + k, x: 250 + i * 165, y: 172 + ACTIONS.length * ROW + 2, w: 155, h: 42, label, font: 22, color: '#ffd24a',
+    [['emit', 'CAST'], ['empower', 'HEAT'], ['compress', 'SQUEEZE'], ['redirect', 'THROW'], ['brake', 'STOP'], ['cool', 'COOL']].forEach(([k, label], i) => B.push({
+      id: 'latch-' + k, x: 200 + i * 130, y: 486, w: 122, h: 44, label, font: 17, color: '#ffd24a',
       active: () => caster.latch[k], onClick: () => { caster.latch[k] = !caster.latch[k]; this.panel.dirty = true; },
     }));
     B.push({
-      id: 'reset-hand', x: 28, y: 616, w: 270, h: 52, label: 'RESET THIS HAND', font: 22, color: '#ff6b8a',
+      id: 'open-studio', x: 28, y: 556, w: 520, h: 64, label: 'OPEN GESTURE STUDIO', font: 30, color: '#ffb02a', active: () => true,
+      onClick: () => this.d.openStudio(id),
+    });
+    B.push({
+      id: 'reset-hand', x: 568, y: 556, w: 400, h: 64, label: 'RESET THIS HAND', font: 22, color: '#ff6b8a',
       onClick: () => { resetHand(id); this.panel.dirty = true; },
     });
     B.push({
-      id: 'kind', x: 318, y: 616, w: 400, h: 52, font: 22, color: '#4fc3ff',
+      id: 'kind', x: 28, y: 634, w: 520, h: 46, font: 20, color: '#4fc3ff',
       label: () => (this.kind() === 'hand' ? 'EDITING: HAND GESTURES' : 'EDITING: CONTROLLER BUTTONS'),
-      onClick: () => { settings.bindKind = this.kind() === 'hand' ? 'ctrl' : 'hand'; this.build(); this.mark(); },
+      onClick: () => { settings.bindKind = this.kind() === 'hand' ? 'ctrl' : 'hand'; this.mark(); },
     });
   }
 
   buildWorld(B) {
-    TUNABLES.forEach(([key, , min, max, step, dec], i) => {
+    const first = this.worldPage * TUNABLE_PAGE;
+    const list = TUNABLES.slice(first, first + TUNABLE_PAGE);
+    list.forEach(([key, , min, max, step], i) => {
       const y = 92 + i * WROW;
       const change = (dir) => () => {
         const v = Math.round((CFG[key] + dir * step) * 100) / 100;
@@ -134,16 +132,23 @@ export class Menu {
       B.push({ id: key + '-', x: 600, y, w: 60, h: 38, label: '-', font: 32, color: '#ffd24a', onClick: change(-1) });
       B.push({ id: key + '+', x: 800, y, w: 60, h: 38, label: '+', font: 32, color: '#ffd24a', onClick: change(1) });
     });
-    const y1 = 92 + TUNABLES.length * WROW;
+    if (first + TUNABLE_PAGE >= TUNABLES.length) {
+      const y1 = 92 + list.length * WROW;
+      B.push({
+        id: 'menuhand', x: 600, y: y1, w: 260, h: 38, font: 24, color: '#ffffff',
+        label: () => (settings.menuHand === 'left' ? 'LEFT HAND' : 'RIGHT HAND'),
+        onClick: () => { settings.menuHand = settings.menuHand === 'left' ? 'right' : 'left'; this.mark(); },
+      });
+      B.push({
+        id: 'mesh', x: 600, y: y1 + WROW, w: 260, h: 38, font: 24, color: '#7ff0c0',
+        label: () => (settings.showMesh ? 'SHOWN' : 'HIDDEN'), active: () => settings.showMesh,
+        onClick: () => { settings.showMesh = !settings.showMesh; this.d.env.setWireVisible(settings.showMesh); this.mark(); },
+      });
+    }
     B.push({
-      id: 'menuhand', x: 600, y: y1, w: 260, h: 38, font: 24, color: '#ffffff',
-      label: () => (settings.menuHand === 'left' ? 'LEFT HAND' : 'RIGHT HAND'),
-      onClick: () => { settings.menuHand = settings.menuHand === 'left' ? 'right' : 'left'; this.mark(); },
-    });
-    B.push({
-      id: 'mesh', x: 600, y: y1 + WROW, w: 260, h: 38, font: 24, color: '#7ff0c0',
-      label: () => (settings.showMesh ? 'SHOWN' : 'HIDDEN'), active: () => settings.showMesh,
-      onClick: () => { settings.showMesh = !settings.showMesh; this.d.env.setWireVisible(settings.showMesh); this.mark(); },
+      id: 'page', x: 640, y: 642, w: 330, h: 44, font: 20, color: '#4fc3ff',
+      label: () => (this.worldPage === 0 ? 'MORE SETTINGS  >' : '<  BACK'),
+      onClick: () => { this.worldPage = this.worldPage === 0 ? 1 : 0; this.build(); this.panel.dirty = true; },
     });
     B.push({
       id: 'reset-all', x: 28, y: 642, w: 300, h: 44, label: 'RESET EVERYTHING', font: 20, color: '#ff6b8a',
@@ -159,15 +164,19 @@ export class Menu {
     const text = (s, x, y, font, color, align = 'left') => { ctx.font = font; ctx.fillStyle = color; ctx.textAlign = align; ctx.fillText(s, x, y); };
     if (this.tab === 'play') this.drawPlay(ctx, W, text);
     else if (this.tab === 'world') {
-      TUNABLES.forEach(([key, label, , , , dec], i) => {
+      const first = this.worldPage * TUNABLE_PAGE;
+      const list = TUNABLES.slice(first, first + TUNABLE_PAGE);
+      list.forEach(([key, label, , , , dec], i) => {
         const y = 92 + i * WROW + 19;
         text(label, 32, y, '24px system-ui, sans-serif', '#ffffff');
         text(Number(CFG[key]).toFixed(dec), 730, y, 'bold 26px system-ui, sans-serif', '#ffd24a', 'center');
       });
-      const y1 = 92 + TUNABLES.length * WROW + 19;
-      text('Menu button is on your', 32, y1, '24px system-ui, sans-serif', '#ffffff');
-      text('Room surfaces overlay', 32, y1 + WROW, '24px system-ui, sans-serif', '#ffffff');
-      text('Saved automatically on this headset.', 360, 664, '20px system-ui, sans-serif', '#7f8bb8');
+      if (first + TUNABLE_PAGE >= TUNABLES.length) {
+        const y1 = 92 + list.length * WROW + 19;
+        text('Menu button is on your', 32, y1, '24px system-ui, sans-serif', '#ffffff');
+        text('Room surfaces overlay', 32, y1 + WROW, '24px system-ui, sans-serif', '#ffffff');
+      }
+      text('Saved automatically on this headset.', 360, 664, '18px system-ui, sans-serif', '#7f8bb8');
     } else this.drawHand(ctx, W, text);
   }
 
@@ -181,26 +190,31 @@ export class Menu {
       text(`Score ${fmt(g.score)}  -  Wave ${g.wave}  -  Best ${fmt(g.best)}`, W / 2, 238, '30px system-ui, sans-serif', '#c9d4ff', 'center');
     } else if (g.state === 'playing') {
       text(`Wave ${g.wave}  -  Score ${fmt(g.score)}  -  Lives ${g.lives}`, W / 2, 190, '30px system-ui, sans-serif', '#c9d4ff', 'center');
-    } else text('Hold the line against the rift. Customise both hands in the tabs above.', W / 2, 190, '24px system-ui, sans-serif', '#c9d4ff', 'center');
+    } else text('Hold the line against the rift. Remap every gesture in the STUDIO tab.', W / 2, 190, '24px system-ui, sans-serif', '#c9d4ff', 'center');
 
     const kind = this.kind();
     ['left', 'right'].forEach((id, c) => {
       const cfg = settings.hands[id], x = 40 + c * 480;
-      text(`${id.toUpperCase()} HAND: ${cfg.element.toUpperCase()}`, x, 290, 'bold 28px system-ui, sans-serif', COLORS[cfg.element]);
-      ['emit', 'empower', 'redirect', 'cool', 'cycle', 'sweep'].forEach((a, i) => {
-        text(INPUT_LABEL[cfg[kind][a]], x, 330 + i * 34, 'bold 21px system-ui, sans-serif', '#ffd24a');
-        text(ACTION_LABEL[a], x + 190, 330 + i * 34, '22px system-ui, sans-serif', '#ffffff');
+      text(`${id.toUpperCase()} HAND: ${cfg.element.toUpperCase()}`, x, 280, 'bold 28px system-ui, sans-serif', COLORS[cfg.element]);
+      ['emit', 'empower', 'compress', 'pull', 'push', 'cycle'].forEach((a, i) => {
+        text(gestureLabel(cfg[kind][a]), x, 326 + i * 34, 'bold 21px system-ui, sans-serif', '#ffd24a');
+        text(ACTION_LABEL[a], x + 215, 326 + i * 34, '22px system-ui, sans-serif', '#ffffff');
       });
     });
     text(`Menu button: on your ${settings.menuHand} ${this.d.getScheme() === 'hands' ? 'hand (look at the back of it)' : 'controller'}`, W / 2, 553, '22px system-ui, sans-serif', '#9aa3c8', 'center');
   }
 
   drawHand(ctx, W, text) {
-    const id = this.tab, cfg = settings.hands[id];
+    const id = this.tab, cfg = settings.hands[id], kind = this.kind();
     text('Element', 32, 126, 'bold 26px system-ui, sans-serif', COLORS[cfg.element]);
-    ACTIONS.forEach((a, i) => text(ACTION_LABEL[a], 32, 172 + i * ROW + 21, '24px system-ui, sans-serif', '#ffffff'));
-    text('Hold on', 32, 172 + ACTIONS.length * ROW + 23, '24px system-ui, sans-serif', '#ffffff');
-    text(`Tap < > or the box to change. Gestures: ${this.kind() === 'hand' ? 'pinch with thumb + finger, fist, open palm.' : 'trigger, grip, A/X, B/Y, stick click.'}`, W / 2, 594, '18px system-ui, sans-serif', '#7f8bb8', 'center');
+    text('Current bindings', 32, 186, 'bold 22px system-ui, sans-serif', '#9aa3c8');
+    ACTIONS.forEach((a, i) => {
+      const col = i < 8 ? 0 : 1, row = i < 8 ? i : i - 8;
+      const x = 32 + col * 490, y = 220 + row * 31;
+      text(ACTION_LABEL[a], x, y, '20px system-ui, sans-serif', '#ffffff');
+      text(gestureLabel(cfg[kind][a]), x + 230, y, 'bold 20px system-ui, sans-serif', '#ffd24a');
+    });
+    text('Hold on', 32, 508, '24px system-ui, sans-serif', '#ffffff');
   }
 
   drawBadge(ctx, p) {

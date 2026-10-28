@@ -8,7 +8,7 @@
 import { S, STEP } from './config.js';
 
 const rnd = Math.random;
-const MAX_SPEED = 3.5;           // m/s cap for pushed elements
+const speedCap = { v: 8 };       // m/s cap for pushed elements (CFG.maxSpeed)
 const FIRE_START = 25 * S;
 const FIRE_MAX = 0.08;
 const EMPOWER_GROW = 2 * S;      // "size += 2" in the fire game
@@ -30,7 +30,7 @@ class Particle {
   kick(dx, dy, dz) {
     this.vx += dx; this.vy += dy; this.vz += dz;
     const s2 = this.vx * this.vx + this.vy * this.vy + this.vz * this.vz;
-    if (s2 > MAX_SPEED * MAX_SPEED) { const k = MAX_SPEED / Math.sqrt(s2); this.vx *= k; this.vy *= k; this.vz *= k; }
+    if (s2 > speedCap.v * speedCap.v) { const k = speedCap.v / Math.sqrt(s2); this.vx *= k; this.vy *= k; this.vz *= k; }
   }
 }
 
@@ -444,6 +444,75 @@ export class ParticleWorld {
     }
   }
 
+  // Compress: squeeze the hand's element within reach into one tight ball (denser = hotter fire).
+  compress(element, cx, cy, cz, reach, dt) {
+    const r2 = reach * reach;
+    let n = 0, mx = 0, my = 0, mz = 0;
+    for (const p of this.list) {
+      if (p.type !== element || p.isIce) continue;
+      const dx = p.x - cx, dy = p.y - cy, dz = p.z - cz;
+      if (dx * dx + dy * dy + dz * dz > r2) continue;
+      mx += p.x; my += p.y; mz += p.z; n++;
+    }
+    if (n < 2) return;
+    mx /= n; my /= n; mz /= n;
+    for (const p of this.list) {
+      if (p.type !== element || p.isIce) continue;
+      const dx = p.x - cx, dy = p.y - cy, dz = p.z - cz;
+      if (dx * dx + dy * dy + dz * dz > r2) continue;
+      const damp = Math.max(0, 1 - 6 * dt);
+      p.vx = p.vx * damp + (mx - p.x) * 10 * dt;
+      p.vy = p.vy * damp + (my - p.y) * 10 * dt;
+      p.vz = p.vz * damp + (mz - p.z) * 10 * dt;
+      p.kick(0, 0, 0);
+    }
+  }
+
+  // Pull in: drag every element of the given types toward a point (a spring with damping, so they settle there).
+  pull(elements, tx, ty, tz, strength, dt) {
+    const damp = Math.max(0, 1 - 6 * dt);
+    for (const p of this.list) {
+      if (p.isIce || !elements.has(p.type)) continue;
+      p.vx = p.vx * damp + (tx - p.x) * strength * dt;
+      p.vy = p.vy * damp + (ty - p.y) * strength * dt;
+      p.vz = p.vz * damp + (tz - p.z) * strength * dt;
+      p.kick(0, 0, 0);
+    }
+  }
+
+  // Blast away: shove elements of this type out from a point.
+  blast(element, cx, cy, cz, reach, strength, dt) {
+    for (const p of this.list) {
+      if (p.type !== element || p.isIce) continue;
+      const dx = p.x - cx, dy = p.y - cy, dz = p.z - cz;
+      const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      if (d > reach) continue;
+      const w = (1 - d / reach) * strength * dt / Math.max(d, 0.05);
+      p.kick(dx * w, dy * w, dz * w);
+    }
+  }
+
+  // Stop momentum: bleed off the speed of nearby elements of this type.
+  brake(element, cx, cy, cz, reach, dt) {
+    const r2 = reach * reach, k = Math.max(0, 1 - 9 * dt);
+    for (const p of this.list) {
+      if (p.type !== element) continue;
+      const dx = p.x - cx, dy = p.y - cy, dz = p.z - cz;
+      if (dx * dx + dy * dy + dz * dz > r2) continue;
+      p.vx *= k; p.vy *= k; p.vz *= k;
+    }
+  }
+
+  // Dispel: remove every element of this type (a little shower of sparks marks it).
+  dispel(element) {
+    let i = 0;
+    for (const p of this.list) {
+      if (p.type !== element) continue;
+      if (i++ % 6 === 0) this.spark(p.x, p.y, p.z, p.r, p.g, p.b, 1, 0.5);
+      p.dead = true;
+    }
+  }
+
   cool(element, cx, cy, cz) {
     if (element !== 'water') return;
     const reach2 = this.cfg.reach * this.cfg.reach;
@@ -474,6 +543,7 @@ export class ParticleWorld {
 
   step() {
     lifeScaleRef.v = this.cfg.lifeScale;
+    speedCap.v = this.cfg.maxSpeed;
     this.fireDecay = Math.pow(0.98, 1 / this.cfg.lifeScale);
     const g = this.grid; g.clear();
     const c = this.cell, list = this.list;
